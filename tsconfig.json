@@ -12,5 +12,6 @@
     "skipLibCheck": true,
     "paths": { "typebox": ["./node_modules/@sinclair/typebox/build/cjs/index.d.ts"] }
   },
-  "include": ["index.ts", "src/**/*.ts", "eval/**/*.ts"]
+  "include": ["index.ts", "src/**/*.ts", "eval/**/*.ts"],
+  "exclude": ["src/**/__fixtures__/**"]
 }
