@@ -1,0 +1,33 @@
+{
+  "name": "pi-navigator",
+  "version": "0.0.0",
+  "description": "pi extension: worktree-aware repository navigator for faster find-read-update",
+  "type": "module",
+  "keywords": ["pi-package", "pi-extension"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills/navigator/SKILL.md"],
+    "prompts": ["./prompts/navigator-persona.md"]
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.25.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "@sinclair/typebox": "^0.34.0",
+    "tree-sitter-cli": "^0.25.0",
+    "tree-sitter-ruby": "^0.23.0",
+    "tree-sitter-python": "^0.23.0",
+    "tree-sitter-typescript": "^0.23.0",
+    "tree-sitter-javascript": "^0.23.0",
+    "typescript": "^5.6.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "build:grammars": "bash scripts/build-grammars.sh"
+  }
+}
