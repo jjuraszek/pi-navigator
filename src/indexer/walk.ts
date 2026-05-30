@@ -20,8 +20,9 @@ const ALWAYS_IGNORE_DIRS = new Set([
 ]);
 
 // Secret basenames that must never be enumerated.
+// Lowercased once so matching is case-insensitive on all filesystems.
 function isSecret(file: string): boolean {
-  const b = basename(file);
+  const b = basename(file).toLowerCase();
   if (b.startsWith(".env")) return true; // .env, .env.local, .env.production …
   if (b.endsWith(".pem")) return true;
   if (b.endsWith(".key")) return true;
@@ -93,7 +94,6 @@ function walkDir(root: string, rel: string, out: string[]): void {
   const abs = rel ? join(root, rel) : root;
   for (const name of readdirSync(abs)) {
     const relChild = rel ? `${rel}/${name}` : name;
-    if (ALWAYS_IGNORE_DIRS.has(name)) continue;
     const child = join(abs, name);
     let st;
     try {
@@ -102,6 +102,8 @@ function walkDir(root: string, rel: string, out: string[]): void {
       continue;
     }
     if (st.isDirectory()) {
+      // Denylist applies to directories only; a regular file named "dist" is fine.
+      if (ALWAYS_IGNORE_DIRS.has(name)) continue;
       walkDir(root, relChild, out);
     } else if (st.isFile()) {
       // Normalize separators for non-POSIX systems
