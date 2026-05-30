@@ -30,11 +30,14 @@ export function parseLog(raw: string): Commit[] {
   for (const line of raw.split("\n")) {
     const trimmed = line.trim();
     if (trimmed.startsWith("__C__ ")) {
-      // Flush previous commit (even if it has no files — safe)
-      if (current !== null) commits.push(current);
       const parts = trimmed.split(" ");
-      // parts: ["__C__", sha, ts]
-      current = { sha: parts[1], ts: Number(parts[2]), files: [] };
+      const ts = Number(parts[2]);
+      if (parts.length < 3 || !Number.isFinite(ts)) {
+        // malformed header (missing ts or non-numeric) — skip, keep accumulating
+        continue;
+      }
+      if (current !== null) commits.push(current);
+      current = { sha: parts[1], ts, files: [] };
     } else if (current !== null && trimmed.length > 0) {
       current.files.push(trimmed);
     }
@@ -61,7 +64,7 @@ export function foldSignals(
   const cochange = new Map<string, number>();
 
   for (const commit of commits) {
-    const ageDays = (opts.now - commit.ts) / 86400;
+    const ageDays = Math.max(0, (opts.now - commit.ts) / 86400);
     const inWindow30 = ageDays <= 30;
     const inWindow90 = ageDays <= 90;
 
