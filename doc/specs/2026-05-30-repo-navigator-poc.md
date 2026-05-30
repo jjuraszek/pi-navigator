@@ -6,6 +6,10 @@
 - **Scope:** Proof of concept. Core vertical slice only; expansion items explicitly deferred.
 
 ### Revision history
+- **r3 (2026-05-30):** Bulk indexing moved to an async background `worker_thread`
+  (non-blocking turns); indexing is **resumable** across kills via durable
+  per-batch progress derived from DB state; dropped the `bun:sqlite` adapter
+  branch (`node:sqlite`/Node only, verified working inside a worker).
 - **r2 (2026-05-30):** Rolling hook-driven indexing (no CLI); storage switched to
   built-in `node:sqlite` (drop `better-sqlite3`); minimal tool-description nudge
   with persona injection off by default; index path
@@ -49,8 +53,10 @@ working-tree bytes (see §7, §10).
 ### In (PoC core)
 
 - **Rolling, hook-driven indexing** owned by the extension: catch-up on session
-  start, re-index edited files immediately, drain a full-crawl backlog in
-  time-boxed ticks across turns. **No standalone CLI.**
+  start, re-index edited files immediately (high priority), and drain the
+  full-crawl backlog in an **async background `worker_thread`** that never blocks
+  a turn. **Resumable** — progress is durable, so a killed/restarted session
+  continues from where it stopped, not from scratch. **No standalone CLI.**
 - Shared `node:sqlite` index at `~/.pi/pi-navigator-cache/<repo_name>_<repo_id>.db`,
   **outside** any worktree, shared across worktrees and subagents.
 - `navigator_locate(query)` — ranked entry points fused from FTS + path +
@@ -76,7 +82,6 @@ working-tree bytes (see §7, §10).
 - Tracking the built-in `read` tool for the verified-cache (PoC caches only
   `navigator_slice` results; §7.3).
 - Rails-aware metadata (routes/associations/jobs as first-class symbols).
-- Worker-thread bulk indexing (PoC uses chunked main-thread ticks; §20).
 
 ---
 
@@ -87,20 +92,19 @@ One extension process owns indexing, querying, and freshness. No external CLI.
 ```
    pi session (Node 24)                          shared, repo-keyed
  ┌───────────────────────────────────────┐     ┌──────────────────────────────┐
- │  pi-navigator extension (index.ts)     │     │ node:sqlite (FTS5)           │
- │                                        │     │ ~/.pi/pi-navigator-cache/    │
- │  hooks:                                │     │   <repo_name>_<repo_id>.db   │
- │   session_start → open DB, catch-up    │     │ metadata+symbols+co-change   │
- │   tool_execution_end → re-index edits  │ ──▶ │ +ref edges+FTS               │
- │   turn_end → time-boxed index tick     │write│ NO file contents persisted   │
- │                                  (lock)│     │ WAL: 1 writer, many readers  │
- │  tools: navigator_locate / _slice      │ ◀── │                              │
- │  commands: /navigator status|reindex   │read │                              │
- │  in-memory: work queue, verified-cache │     └──────────────────────────────┘
- └───────────────────────────────────────┘            ▲ read-only
-                                                       │
-                              parallel subagents (pi-subagents) read the same
-                              index concurrently; only the lock holder writes.
+ │ main thread (index.ts)                 │     │ node:sqlite (FTS5)           │
+ │  session_start → elect writer (lock)   │     │ ~/.pi/pi-navigator-cache/    │
+ │  tool_execution_end → priority enqueue │     │   <repo_name>_<repo_id>.db   │
+ │  tools: navigator_locate / _slice      │ ◀── │ metadata+symbols+co-change   │
+ │  commands: /navigator status|reindex   │read │ +ref edges+FTS               │
+ │  verified-cache (in-memory)            │     │ NO file contents persisted   │
+ ├───────────────────────────────────────┤     │ WAL: 1 writer, many readers  │
+ │ async worker_thread  (sole writer)     │     │                              │
+ │  derive resumable backlog from DB      │ ──▶ │                              │
+ │  index off-thread, commit per batch    │write└──────────────────────────────┘
+ └───────────────────────────────────────┘
+        ▲ read-only — parallel subagents (pi-subagents) share this index;
+        │            only the lock holder writes (see §10).
 ```
 
 - **Index is a cross-worktree navigation approximation.** It may reflect another
@@ -118,12 +122,13 @@ One extension process owns indexing, querying, and freshness. No external CLI.
 
 | Component | Path | Responsibility |
 |---|---|---|
-| Extension entry | `index.ts` | Register hooks, tools, commands; own DB handles, work queue, verified-cache. |
-| Rolling scheduler | `src/indexer/rolling.ts` | Prioritized work queue; time-boxed ticks; writer-lock ownership; catch-up + edit-trigger + backlog drain. |
+| Extension entry | `index.ts` | Register hooks, tools, commands; own DB handle, spawn/own the worker, verified-cache. |
+| Rolling scheduler | `src/indexer/rolling.ts` | Main-thread coordinator: writer-lock election, priority enqueue (edited files), spawn/own the worker, expose coverage. |
+| Async worker | `src/indexer/worker.ts` | `worker_thread` sole writer: derives the resumable backlog from DB state, indexes off-thread, commits per batch. |
 | Walk | `src/indexer/walk.ts` | gitignore-aware traversal + filters (size, binary, secret/ignore list). |
 | Git signals | `src/indexer/git.ts` | Recency (last-commit-at, counts), co-change edges from `git log`. |
 | Symbols | `src/indexer/symbols.ts` | `web-tree-sitter` (WASM) symbols + import edges per language. |
-| DB adapter | `src/store/db.ts` | Selects `node:sqlite` (Node) / `bun:sqlite` (Bun); suppresses the SQLite ExperimentalWarning. |
+| DB adapter | `src/store/db.ts` | Thin `node:sqlite` wrapper (open, WAL pragma, prepared-statement helpers); suppresses the SQLite ExperimentalWarning. |
 | Store | `src/store/{schema,queries}.ts` | DDL, migrations, FTS5, prepared statements. No file contents. |
 | Vector seam | `src/store/vectors.ts` | Interface-only placeholder for future embeddings. |
 | Navigator | `src/navigator/{locate,slice,rank,verified-cache}.ts` | Rank + fan-out, ground-truth slice, scoring, session cache. |
@@ -146,7 +151,8 @@ live from disk (privacy + freshness; see §11 secrets).
 ### 5.1 `meta`
 `key TEXT PRIMARY KEY, value TEXT` — `schema_version`, `repo_id`,
 `head_sha_at_index`, `indexed_at`, `navigator_version`, `coverage_total`,
-`coverage_indexed`.
+`coverage_indexed`, and the resume cursors `cochange_scanned_through` (oldest
+commit SHA already folded into co-change) and `full_crawl_done` (0/1).
 
 ### 5.2 `files`
 ```
@@ -211,46 +217,58 @@ change required.
 
 ---
 
-## 6. Rolling Indexing (hook-driven, no CLI)
+## 6. Rolling Indexing (async, resumable, no CLI)
 
-The extension keeps an in-process **work queue** and DB handles that persist
-across turns within a session. Indexing is incremental and time-boxed so it
-never blocks a turn meaningfully.
+Indexing is owned by the extension and runs in an async background
+`worker_thread`, so turns are never blocked. All progress is durable, so a
+killed or restarted session resumes from DB state rather than re-indexing from
+scratch.
 
-### 6.1 Triggers
+### 6.1 Triggers (main thread)
 - **`session_start`:** resolve repo-id/path; open DB (create + migrate if new);
-  attempt to acquire the writer lock (§10). If acquired, this session is the
-  indexer: enqueue **catch-up** (`git diff --name-status <head_sha_at_index>..HEAD`
-  + `git status --porcelain`) and, if coverage is incomplete, a **full-crawl
-  backlog**. If the lock is held elsewhere, run read-only (no indexing).
+  attempt the writer lock (§10). If acquired, spawn the worker. If held
+  elsewhere, run read-only (no worker).
 - **`tool_execution_end`:** if the tool was `edit`/`write` (or a `bash` that
-  likely mutated files), enqueue the touched paths at **high priority** so
-  long-lived sessions stay fresh. Also record read/slice targets for the
+  likely mutated files), post the touched paths to the worker as **high
+  priority** so long-lived sessions stay fresh; also record targets for the
   verified-cache.
-- **`turn_end`:** run one **index tick**.
+- The main thread never indexes inline; it only elects the writer, posts
+  priority paths, and reads.
 
-### 6.2 Priority queue (high → low)
-1. Files edited/written this session (freshness for the active task).
-2. Files changed in the working tree + commits since last index (catch-up).
-3. Full-crawl backlog (the long tail), so first-session coverage converges.
+### 6.2 Resumable backlog (derived from durable state)
+The worker does not rely on an in-memory queue surviving a crash. On start it
+**derives** remaining work from the DB + working tree, which is idempotent:
+1. Walk the worktree (cheap: stat only) → for each file compare `mtime`/size to
+   `files`; unchanged → skip, changed/new → needs (re)hash + symbols.
+2. Files with `symbols_done = 0` → need the symbol/FTS pass.
+3. Co-change: resume the `git log` scan from `meta.cochange_scanned_through`
+   toward older commits until `cochangeMaxCommits`; fold in commits since
+   `head_sha_at_index` for catch-up. Per-commit folding is additive and bounded
+   by the cursor, so it is not double-counted.
+Killing the process leaves the DB consistent (WAL + per-batch commits); the next
+session re-derives and continues.
 
-### 6.3 Tick budget
-Each tick processes at most `indexBatchFiles` (default 40) or `indexTickMs`
-(default 120 ms), whichever first, then yields. Per file: hash, language,
-tree-sitter symbols + import edges, FTS upsert. Git co-change/recency is built
-in bounded commit batches (also chunked across ticks) on first build, capped by
-`cochangeMaxCommits` and ignoring commits touching `> cochangeMaxFilesPerCommit`.
+### 6.3 Priority order
+1. Paths posted by the main thread this session (edited/written files).
+2. Working-tree changes + commits since last index (catch-up).
+3. Full-crawl backlog (the long tail) until `full_crawl_done = 1`.
 
-### 6.4 Coverage & freshness
-`meta.coverage_indexed/coverage_total` and `head_sha_at_index` let `locate`
-report `index.fresh` and let `/navigator status` show progress. Partial
-coverage is usable: `locate` works on whatever is indexed and improves as ticks
-drain. Recent/edited files are covered first by design.
+### 6.4 Batching & crash safety
+The worker commits every `indexBatchSize` files (default 50) in a
+`BEGIN IMMEDIATE` transaction, sleeping `indexIdleMs` (default 25 ms) between
+batches to stay gentle on CPU. A kill loses at most the in-flight batch.
+Coverage counters in `meta` update per batch.
 
-### 6.5 Manual control
+### 6.5 Coverage & freshness
+`meta.coverage_indexed/coverage_total`, `full_crawl_done`, and
+`head_sha_at_index` let `locate` report `index.fresh`/`coverage` and let
+`/navigator status` show live progress. Partial coverage is usable; recent and
+edited files are indexed first by design.
+
+### 6.6 Manual control
 - `/navigator status` — coverage, head-behind, queue depth, lock owner.
-- `/navigator reindex` — clear + enqueue full rebuild. `/navigator reindex <path>`
-  re-indexes a single path immediately.
+- `/navigator reindex` — clear + re-derive a full rebuild. `/navigator reindex
+  <path>` re-indexes one path immediately (posted as top priority).
 
 There is **no external `pi-navigator` binary**.
 
@@ -383,7 +401,7 @@ code coupling). The relationship is pure synergy and one guard rail:
 | Case | Behavior |
 |---|---|
 | Non-git directory | Degrade: FTS + symbols only; no recency/co-change; warn once. |
-| No/partial index | `locate` works on what's indexed and reports `coverage`; ticks fill the rest. |
+| No/partial index | `locate` works on what's indexed and reports `coverage`; the worker fills the rest. |
 | Binary / oversized file | Skipped at walk (size cap + binary sniff). |
 | Vendored/generated dirs | Default ignore list + `.gitignore`. |
 | Deleted file in index | Filtered from `locate`; removed on catch-up. |
@@ -391,6 +409,7 @@ code coupling). The relationship is pure synergy and one guard rail:
 | Slice path outside worktree / missing | Hard error; never read outside the worktree root. |
 | Secrets | DB stores **no contents**; default-ignore `.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`; tokens only; slices honor the same ignore list. |
 | Writer-lock contention | Non-holders read-only; no duplicate indexing; stale lock reclaimed by mtime. |
+| Process killed mid-index | DB stays consistent (WAL + per-batch commits); next session re-derives the backlog and resumes (§6.2). |
 | `node:sqlite` ExperimentalWarning | Suppressed once at DB-adapter load (filter that one warning). |
 | Corrupt/old schema | Migrate by `schema_version`; rebuild if beyond migration. |
 
@@ -423,13 +442,14 @@ pi-navigator/
 ├── index.ts                      # extension entry: hooks, tools, commands, queue, cache
 ├── src/
 │   ├── indexer/
-│   │   ├── rolling.ts            # priority queue + time-boxed ticks + lock ownership
+│   │   ├── rolling.ts            # main-thread coordinator: lock, priority enqueue, owns worker
+│   │   ├── worker.ts             # worker_thread sole writer: resumable backlog, batched commits
 │   │   ├── walk.ts               # gitignore-aware traversal + filters
 │   │   ├── git.ts                # recency + co-change
 │   │   ├── symbols.ts            # web-tree-sitter symbols + import edges
 │   │   └── index.ts             # shared indexing helpers
 │   ├── store/
-│   │   ├── db.ts                 # node:sqlite | bun:sqlite adapter; warning suppress
+│   │   ├── db.ts                 # node:sqlite wrapper (WAL, prepared stmts); warning suppress
 │   │   ├── schema.ts             # DDL + migrations
 │   │   ├── queries.ts            # prepared statements
 │   │   └── vectors.ts            # interface-only seam for future embeddings
@@ -555,8 +575,8 @@ Config under the `navigator` key in `<agent-dir>/settings.json`
 | `indexDir` | `~/.pi/pi-navigator-cache` | Index location (filename `<repo_name>_<repo_id>.db`). |
 | `languages` | `["ruby","python","js","ts"]` | Symbol extraction set. |
 | `maxLocateResults` | `10` | Result cap. |
-| `indexTickMs` | `120` | Per-tick time budget. |
-| `indexBatchFiles` | `40` | Per-tick file budget. |
+| `indexBatchSize` | `50` | Files per worker commit (crash-loss bound). |
+| `indexIdleMs` | `25` | Worker sleep between batches (CPU gentleness). |
 | `cochangeWindowDays` | `180` | Recency decay window. |
 | `cochangeMaxCommits` | `4000` | Commit scan bound. |
 | `cochangeMaxFilesPerCommit` | `50` | Ignore mega-commits for co-change. |
@@ -567,9 +587,9 @@ Config under the `navigator` key in `<agent-dir>/settings.json`
 ## 18. Dependencies
 
 - **Storage:** built-in **`node:sqlite`** (Node ≥ 22.5; verified unflagged on
-  Node 24.5 with FTS5 + `bm25()`). **No `better-sqlite3`.** The single
-  ExperimentalWarning is suppressed at adapter load. `src/store/db.ts` keeps a
-  `bun:sqlite` branch so a bun-compiled pi still works.
+  Node 24.5 with FTS5 + `bm25()`, including inside a `worker_thread` with WAL).
+  **No `better-sqlite3`, no `bun:sqlite` branch** (Node is pi's runtime). The
+  single ExperimentalWarning is suppressed at adapter load.
 - **Runtime dep (only one):** `web-tree-sitter` (WASM — no node-gyp) + bundled
   `*.wasm` grammars for Ruby/Python/TS/JS.
 - **Peer (typecheck only; runtime-erased type imports):**
@@ -585,8 +605,9 @@ Config under the `navigator` key in `<agent-dir>/settings.json`
 1. Scaffold + `package.json` manifest + AGENTS.md/README/CHANGELOG + release
    script + CI (`node --test`, typecheck).
 2. Store layer (`db.ts` adapter, schema, migrations, queries) + worktree/repo-id.
-3. Rolling scheduler + hooks (session_start catch-up, turn_end tick,
-   edit-trigger) + git signals (recency, co-change) + writer lock.
+3. Writer lock + async worker (`worker_thread`) with resumable backlog +
+   per-batch commits; main-thread hooks (session_start election, edit-trigger
+   priority enqueue) + git signals (recency, co-change).
 4. Symbols + import edges (web-tree-sitter). FTS population.
 5. `navigator_locate` + ranking + fan-out. `/navigator status|reindex` +
    staleness reporting.
@@ -596,22 +617,21 @@ Config under the `navigator` key in `<agent-dir>/settings.json`
 
 ---
 
-## 20. Open Questions
+## 20. Resolved Review Decisions
 
-1. **Initial-build speed on huge repos.** PoC drains the full-crawl backlog in
-   main-thread ticks (prioritized so recent/edited files index first). For a
-   ~6k-file repo full coverage may take a few minutes of session activity. A
-   `worker_thread` bulk indexer would finish faster but adds complexity — defer
-   to enhancement? (Recommended: yes, ticks for PoC.)
-2. **Bun runtime.** Storage targets `node:sqlite` (confirmed for the Node-run
-   pi). The `bun:sqlite` adapter branch is unverified (no Bun locally). Verify
-   only if running pi as the bun-compiled binary is in scope.
-3. **ExperimentalWarning suppression.** Filtering that one process warning at
-   adapter load — acceptable, or prefer leaving it visible once?
-4. **Eval gate.** Must-have vs should-have for `v0.1.0`. Spec assumes
-   should-have (ship a small case set).
-5. **Subagent indexing.** Relying on the advisory writer lock (robust) rather
-   than detecting subagent context. Confirm that is acceptable, or expose/derive
-   a "root session only indexes" signal if the API offers one.
+All r1–r2 open questions are resolved (review, 2026-05-30):
+
+1. **Initial-build / async (r3).** Bulk indexing runs in an async background
+   `worker_thread` (non-blocking) and is **resumable across kills** via durable
+   per-batch progress derived from DB state (§6.2, §6.4). Not main-thread ticks.
+2. **`node:sqlite` ExperimentalWarning.** Suppressed once at adapter load.
+3. **Eval harness.** Should-have for `v0.1.0` — ship with a small case set (§12).
+4. **Subagent safety.** Advisory writer-lock only; no subagent-context detection
+   (§10).
+5. **Bun runtime.** Out of scope — `node:sqlite`/Node only; no `bun:sqlite`
+   branch (§18).
+
+No open questions remain for the PoC. Future expansion (summaries, embeddings,
+LSP, Rails-aware metadata, worker pool) is tracked in §2 Out and §5.6.
 ```
 
