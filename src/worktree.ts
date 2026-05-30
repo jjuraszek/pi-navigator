@@ -18,8 +18,10 @@ export function resolveRepo(cwd: string, config: NavigatorConfig): RepoInfo {
     const rootCommit = git(cwd, ["rev-list", "--max-parents=0", "HEAD"]).split("\n").pop()!.trim();
     repoId = rootCommit.slice(0, 12);
   } catch {
-    const common = isGit ? git(cwd, ["rev-parse", "--git-common-dir"]) : root;
-    repoId = createHash("sha256").update(common).digest("hex").slice(0, 12);
+    let basis: string;
+    try { basis = isGit ? git(cwd, ["rev-parse", "--git-common-dir"]) : root; }
+    catch { basis = root; }
+    repoId = createHash("sha256").update(basis).digest("hex").slice(0, 12);
   }
   const repoName = basename(root);
   return { root, repoName, repoId, dbPath: join(config.indexDir, `${repoName}_${repoId}.db`), isGit };

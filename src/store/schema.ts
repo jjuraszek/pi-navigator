@@ -16,13 +16,16 @@ CREATE TABLE IF NOT EXISTS symbols (
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE TABLE IF NOT EXISTS cochange (
-  file_a INTEGER NOT NULL, file_b INTEGER NOT NULL, weight REAL NOT NULL,
+  file_a INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  file_b INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  weight REAL NOT NULL,
   PRIMARY KEY (file_a, file_b));
 CREATE TABLE IF NOT EXISTS refs (
   src_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   dst_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, PRIMARY KEY (src_file, dst_file, kind));
 CREATE INDEX IF NOT EXISTS idx_refs_dst ON refs(dst_file);
+-- contentless FTS5: rowid MUST equal files.id (writer discipline; enforced in queries layer)
 CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
   path, symbol_names, kind_tags, content='', tokenize='unicode61');
 `;

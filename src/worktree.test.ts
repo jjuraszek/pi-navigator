@@ -15,6 +15,14 @@ function tmpRepo(): string {
   return d;
 }
 
+test("resolveRepo on a non-git directory uses hash fallback", () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-nogit-"));
+  const r = resolveRepo(d, DEFAULT_CONFIG);
+  assert.equal(r.isGit, false);
+  assert.match(r.repoId, /^[0-9a-f]{12}$/);
+  assert.equal(r.dbPath, join(DEFAULT_CONFIG.indexDir, `${r.repoName}_${r.repoId}.db`));
+});
+
 test("resolveRepo yields root, name, stable id, and cache db path", () => {
   const d = tmpRepo();
   const r = resolveRepo(d, DEFAULT_CONFIG);
