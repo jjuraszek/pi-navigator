@@ -4,7 +4,7 @@ import type { Db } from "../store/db.ts";
 import { getFileByPath } from "../store/queries.ts";
 import { hashBuffer } from "../indexer/hash.ts";
 import { extractSymbols } from "../indexer/symbols.ts";
-import { langOf } from "../indexer/walk.ts";
+import { langOf, isSecret } from "../indexer/walk.ts";
 import type { SliceResult, Lang } from "../types.ts";
 import type { VerifiedCache } from "./verified-cache.ts";
 
@@ -31,6 +31,11 @@ export function slice(
   // Reject if abs escapes the root
   if (relPath.startsWith("..")) {
     throw new Error(`path escapes worktree: ${args.path}`);
+  }
+
+  // Reject secret files — spec invariant: slices honor the same ignore list as the walk.
+  if (isSecret(relPath)) {
+    throw new Error(`slice refused: secret file: ${relPath}`);
   }
 
   if (!existsSync(abs)) {

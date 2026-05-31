@@ -21,7 +21,8 @@ const ALWAYS_IGNORE_DIRS = new Set([
 
 // Secret basenames that must never be enumerated.
 // Lowercased once so matching is case-insensitive on all filesystems.
-function isSecret(file: string): boolean {
+// Exported so src/navigator/slice.ts can enforce the same guard at read time.
+export function isSecret(file: string): boolean {
   const b = basename(file).toLowerCase();
   if (b.startsWith(".env")) return true; // .env, .env.local, .env.production …
   if (b.endsWith(".pem")) return true;

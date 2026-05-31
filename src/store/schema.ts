@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS refs (
   dst_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, PRIMARY KEY (src_file, dst_file, kind));
 CREATE INDEX IF NOT EXISTS idx_refs_dst ON refs(dst_file);
--- FTS5: rowid == files.id. Stores content so SELECT returns non-null values.
+-- FTS5: rowid == files.id.
+-- Deliberate divergence from spec §5.6 (which specifies content='' contentless):
+-- we store path, symbol_names, and kind_tags as real columns so SELECT returns
+-- non-null values for ranking. These are metadata strings only — NOT file contents.
+-- The no-contents invariant (spec §10 / AGENTS.md) is preserved.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
   path, symbol_names, kind_tags, tokenize='unicode61');
 `;

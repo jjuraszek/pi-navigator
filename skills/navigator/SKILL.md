@@ -35,7 +35,7 @@ navigator_locate("Grid")
 navigator_slice("dashboard/app/models/grid.rb", symbol: "sync")
 → content = "  def sync\n    ...\n  end", content_hash = "abc123..."
 
-# Read lines 10–30 of a Python file
+# Read lines 10–30 of a Python file (startLine/endLine are 1-based, inclusive)
 navigator_slice("excavation/grid_loader.py", startLine: 10, endLine: 30)
 ```
 

@@ -4,6 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RollingIndexer, type WorkerLike } from "./rolling.ts";
+import { acquire } from "../store/lock.ts";
 import { DEFAULT_CONFIG } from "../config.ts";
 import type { RepoInfo } from "../worktree.ts";
 
@@ -44,22 +45,52 @@ test("first indexer is writer + spawns worker; second is read-only", () => {
 
 test("coverage message from worker is captured", () => {
   const repo = fakeRepo();
-  let capturedCb: ((msg: unknown) => void) | undefined;
+  let messageCb: ((msg: unknown) => void) | undefined;
   const sent: unknown[] = [];
   const worker: WorkerLike = {
     postMessage: (m) => { sent.push(m); },
     terminate: () => {},
-    on: (_event, cb) => { capturedCb = cb as (msg: unknown) => void; },
+    // Capture only the "message" callback; ignore "error" and "exit" for this test.
+    on: (event, cb) => { if (event === "message") messageCb = cb as (msg: unknown) => void; },
   };
   const a = new RollingIndexer(DEFAULT_CONFIG, () => worker);
   a.start(repo);
   assert.equal(a.isWriter, true);
 
   // Simulate the worker emitting a coverage message
-  assert.ok(capturedCb !== undefined, "on('message') must have been called");
-  capturedCb({ type: "coverage", coverage: { total: 2, indexed: 1, fullCrawlDone: false, headBehind: 0 } });
+  assert.ok(messageCb !== undefined, "on('message') must have been called");
+  messageCb({ type: "coverage", coverage: { total: 2, indexed: 1, fullCrawlDone: false, headBehind: 0 } });
 
   assert.equal(a.coverage?.indexed, 1);
   assert.equal(a.coverage?.total, 2);
   a.stop();
+});
+
+test("worker crash: workerFailed=true and lock released for next acquirer", () => {
+  const repo = fakeRepo();
+  // Capture the "exit" callback so we can fire it manually
+  const callbacks = new Map<string, (arg: any) => void>();
+  const crashWorker: WorkerLike = {
+    postMessage: () => {},
+    terminate: () => {},
+    on: (event, cb) => { callbacks.set(event, cb); },
+  };
+
+  const a = new RollingIndexer(DEFAULT_CONFIG, () => crashWorker);
+  a.start(repo);
+  assert.equal(a.isWriter, true);
+  assert.equal(a.workerFailed, false);
+
+  // Simulate an unexpected exit (non-zero code)
+  const exitCb = callbacks.get("exit");
+  assert.ok(exitCb !== undefined, "exit callback must be registered");
+  exitCb(1);
+
+  assert.equal(a.workerFailed, true);
+
+  // Lock must have been released — a second indexer can now acquire it
+  const b = new RollingIndexer(DEFAULT_CONFIG, () => crashWorker);
+  b.start(repo);
+  assert.equal(b.isWriter, true, "second indexer must acquire lock after crash");
+  b.stop();
 });

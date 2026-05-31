@@ -107,8 +107,8 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
     parameters: Type.Object({
       path: Type.String({ description: "Repo-relative or absolute path (leading @ is stripped)" }),
       symbol: Type.Optional(Type.String({ description: "Symbol name to slice (class/method/fn)" })),
-      startLine: Type.Optional(Type.Number({ description: "Start line (0-based, inclusive)" })),
-      endLine: Type.Optional(Type.Number({ description: "End line (0-based, inclusive)" })),
+      startLine: Type.Optional(Type.Number({ description: "Start line (1-based, inclusive)" })),
+      endLine: Type.Optional(Type.Number({ description: "End line (1-based, inclusive)" })),
     }),
     async execute(
       _toolCallId: string,

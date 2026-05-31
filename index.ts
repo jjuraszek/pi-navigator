@@ -57,7 +57,8 @@ export default function (pi: ExtensionAPI): void {
     const repo = resolveRepo(ctx.cwd, config);
 
     // Open a read/write DB handle on the main thread.
-    // migrate() is idempotent and ensures the schema exists before the worker attaches.
+    // Bootstrap exception: migrate is idempotent + WAL-serialised; safe for non-writers
+    // to ensure schema exists before the lock election and worker spawn.
     const db = openDb(repo.dbPath);
     migrate(db);
 

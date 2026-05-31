@@ -47,3 +47,10 @@ test("slice by line range returns those lines", async () => {
   const r = slice(db, root, cache, { path: "grid.rb", startLine: 2, endLine: 3 });
   assert.equal(r.content, "  def sync\n    1"); // lines 2-3 (1-based)
 });
+
+test("slice refuses secret files", async () => {
+  const { root, db } = await setup();
+  writeFileSync(join(root, ".env"), "SECRET=hunter2\n");
+  const cache = new VerifiedCache();
+  assert.throws(() => slice(db, root, cache, { path: ".env" }), /secret/i);
+});

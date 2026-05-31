@@ -1,6 +1,7 @@
 import type { Db } from "../store/db.ts";
 import { getMeta, getCoverage } from "../store/queries.ts";
 import { headSha } from "../worktree.ts";
+import { countCommitsBetween } from "../indexer/git.ts";
 import { score, pathMatch, recencyBoost } from "./rank.ts";
 import type {
   NavigatorConfig,
@@ -61,7 +62,8 @@ export function locate(
   const fresh = Boolean(indexHeadSha && currentHead && indexHeadSha === currentHead);
   const cov = getCoverage(db);
   const coverage = cov.total > 0 ? cov.indexed / cov.total : 0;
-  const indexStatus = { fresh, head_behind: 0, coverage };
+  const head_behind = fresh ? 0 : countCommitsBetween(root, indexHeadSha ?? "");
+  const indexStatus = { fresh, head_behind, coverage };
 
   const empty: LocateResponse = { results: [], cluster: null, index: indexStatus };
 

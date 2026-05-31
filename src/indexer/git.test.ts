@@ -76,3 +76,30 @@ test("foldSignals: mega-commit skips cochange but still counts recency", () => {
   assert.equal(recency.get("b.rb")!.c90, 1);
   assert.equal(recency.get("c.rb")!.c90, 1);
 });
+
+test("countCommitsBetween: 0 when already at HEAD, 1 after one more commit", async () => {
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const { countCommitsBetween } = await import("./git.ts");
+
+  const d = mkdtempSync(join(tmpdir(), "nav-cib-"));
+  const git = (args: string[]) =>
+    execFileSync("git", args, { cwd: d, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  git(["init", "-q"]);
+  git(["config", "user.email", "a@b.c"]);
+  git(["config", "user.name", "t"]);
+  writeFileSync(join(d, "a.rb"), "x");
+  git(["add", "."]);
+  git(["commit", "-qm", "init"]);
+
+  const head = git(["rev-parse", "HEAD"]);
+  assert.equal(countCommitsBetween(d, head), 0, "at HEAD → 0");
+  assert.equal(countCommitsBetween(d, ""), 0, "empty sinceSha → 0");
+
+  writeFileSync(join(d, "b.rb"), "y");
+  git(["add", "."]);
+  git(["commit", "-qm", "second"]);
+  assert.equal(countCommitsBetween(d, head), 1, "one new commit → 1");
+});

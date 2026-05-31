@@ -96,6 +96,27 @@ export function foldSignals(
 }
 
 /**
+ * Count commits reachable from HEAD but not from sinceSha.
+ * Returns 0 on any error (non-git dir, empty repo, unknown sha).
+ */
+export function countCommitsBetween(root: string, sinceSha: string): number {
+  if (!sinceSha) return 0;
+  try {
+    const raw = execFileSync(
+      "git",
+      ["rev-list", "--count", `${sinceSha}..HEAD`],
+      { cwd: root, stdio: ["ignore", "pipe", "ignore"] },
+    )
+      .toString()
+      .trim();
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Run `git log` and return parsed commits.  Returns [] for non-git dirs or
  * repos with no commits.
  */

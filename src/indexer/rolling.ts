@@ -10,7 +10,9 @@ const LOCK_TTL_MS = 60_000;
 export interface WorkerLike {
   postMessage(msg: WorkerInbound): void;
   terminate(): void | Promise<number>;
-  on(event: string, cb: (msg: unknown) => void): void;
+  // event param is `any` so a single signature covers "message" (Coverage),
+  // "error" (Error), and "exit" (number) without a union overload chain.
+  on(event: "message" | "error" | "exit", cb: (arg: any) => void): void;
 }
 
 export type SpawnFn = (workerData: {
@@ -37,6 +39,7 @@ export class RollingIndexer {
   private _worker: WorkerLike | null = null;
   private _coverage: Coverage | null = null;
   private _stopped = false;
+  private _workerError: string | null = null;
 
   constructor(config: NavigatorConfig, spawn?: SpawnFn) {
     this._config = config;
@@ -49,6 +52,10 @@ export class RollingIndexer {
 
   get coverage(): Coverage | null {
     return this._coverage;
+  }
+
+  get workerFailed(): boolean {
+    return this._workerError !== null;
   }
 
   start(repo: RepoInfo): void {
@@ -71,6 +78,17 @@ export class RollingIndexer {
           (msg as Record<string, unknown>)["type"] === "coverage"
         ) {
           this._coverage = (msg as Record<string, unknown>)["coverage"] as Coverage;
+        }
+      });
+      worker.on("error", (err: Error) => {
+        this._workerError = err?.message ?? String(err);
+        this._releaseLock();
+      });
+      worker.on("exit", (code: number) => {
+        // code 0 = clean stop; non-zero = unexpected crash
+        if (code !== 0) {
+          this._workerError = `worker exited with code ${code}`;
+          this._releaseLock();
         }
       });
     } else {
@@ -100,6 +118,11 @@ export class RollingIndexer {
       void this._worker.terminate();
       this._worker = null;
     }
+    this._releaseLock();
+  }
+
+  /** Release the lock without terminating the worker (used on crash). */
+  private _releaseLock(): void {
     if (this._lock !== null) {
       this._lock.release();
       this._lock = null;
