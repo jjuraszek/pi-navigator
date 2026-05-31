@@ -47,3 +47,20 @@ test("import resolution creates grid_sync.rb -> grid.rb ref", async () => {
   const refRows = db.prepare("SELECT 1 FROM refs WHERE src_file=? AND dst_file=?").all(sRow!.id, gRow!.id);
   assert.equal(refRows.length, 1, "grid_sync.rb must have a ref edge to grid.rb");
 });
+
+test("ref resolves when importer sorts before target (same pass)", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-order-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  writeFileSync(join(d, "a_importer.rb"), "require_relative 'z_target'");
+  writeFileSync(join(d, "z_target.rb"), "class ZTarget; end");
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-db2-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  const sid = (db.prepare("SELECT id FROM files WHERE path='a_importer.rb'").get() as any).id;
+  const tid = (db.prepare("SELECT id FROM files WHERE path='z_target.rb'").get() as any).id;
+  const rows = db.prepare("SELECT 1 FROM refs WHERE src_file=? AND dst_file=?").all(sid, tid);
+  assert.equal(rows.length, 1, "importer-first ref must resolve");
+});

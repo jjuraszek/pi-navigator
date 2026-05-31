@@ -47,9 +47,18 @@ async function runWorker(): Promise<void> {
         // forcing it via priority ensures immediate processing.
         priorityBuffer.push(msg.path);
       } else {
-        // Full reindex: reset resume cursors so deriveBacklog re-derives everything.
-        db.prepare("DELETE FROM meta WHERE key IN ('head_sha_at_index','cochange_scanned_through','full_crawl_done')").run();
-        db.prepare("UPDATE files SET symbols_done = 0").run();
+        // Full reindex: atomically reset resume cursors + symbol flags so a
+        // crash between the two statements can't leave meta cleared while
+        // files appear indexed.
+        try {
+          db.exec("BEGIN IMMEDIATE");
+          db.prepare("DELETE FROM meta WHERE key IN ('head_sha_at_index','cochange_scanned_through','full_crawl_done')").run();
+          db.prepare("UPDATE files SET symbols_done = 0").run();
+          db.exec("COMMIT");
+        } catch (err) {
+          try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+          throw err;
+        }
       }
     } else if (msg.type === "stop") {
       db.close();

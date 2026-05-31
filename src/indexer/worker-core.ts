@@ -29,7 +29,17 @@ export interface Backlog {
   needsCochange: boolean;
 }
 
-export function deriveBacklog(db: Db, root: string, config: NavigatorConfig): Backlog {
+/**
+ * Derive which files still need indexing from durable DB state.
+ * Pass `enumerated` from a prior `enumerateFiles(root)` call to avoid a
+ * second filesystem traversal; when omitted the function enumerates itself.
+ */
+export function deriveBacklog(
+  db: Db,
+  root: string,
+  config: NavigatorConfig,
+  enumerated?: { path: string; lang: Lang | null }[],
+): Backlog {
   // Build a map of what's already indexed
   const indexed = new Map<
     string,
@@ -43,8 +53,10 @@ export function deriveBacklog(db: Db, root: string, config: NavigatorConfig): Ba
     });
   }
 
+  const filesToCheck = enumerated ?? enumerateFiles(root);
+
   const needsWork: string[] = [];
-  for (const { path } of enumerateFiles(root)) {
+  for (const { path } of filesToCheck) {
     const absPath = join(root, path);
     let st;
     try {
@@ -122,10 +134,27 @@ function resolveImport(
 }
 
 // ---------------------------------------------------------------------------
-// Per-file processing helper
+// Two-phase processing: phase A shells + phase B extract
 // ---------------------------------------------------------------------------
 
-function processFile(
+/**
+ * Result of Phase A for a single file.
+ * null means the file was binary/oversized (already fully stored, skip Phase B).
+ */
+interface PhaseAResult {
+  fileId: number;
+  text: string;
+  lang: Lang | null;
+}
+
+/**
+ * Phase A: read bytes, stat, hash; upsert the file row; populate pathToId/pathIndex.
+ * Returns null for binary/oversized files (they are fully processed here).
+ * Returns a PhaseAResult for text files so Phase B can finish them without re-reading.
+ *
+ * NOTE: must be called INSIDE an open transaction.
+ */
+function upsertFileShell(
   db: Db,
   root: string,
   relPath: string,
@@ -133,37 +162,36 @@ function processFile(
   pathIndex: Set<string>,
   pathToId: Map<string, number>,
   now: number,
-): void {
+): PhaseAResult | null {
   const absPath = join(root, relPath);
   let buf: Buffer;
   try {
     buf = readFileSync(absPath);
   } catch {
-    return; // file disappeared
+    return null; // file disappeared
   }
 
   const st = statSync(absPath);
   const mtime = Math.floor(st.mtimeMs);
   const size = st.size;
 
-  // Skip oversized or binary files — upsert with symbols_done=1 so they
-  // are not retried on every pass.
+  // Binary or oversized: fully store with symbols_done=1 so we never retry.
   if (buf.length > config.maxFileBytes || isBinary(buf)) {
     const fileId = upsertFile(db, {
       path: relPath,
       lang: null,
       size,
-      content_hash: hashBuffer(buf.slice(0, 4096)), // cheap hash of first chunk
+      content_hash: hashBuffer(buf.slice(0, 4096)),
       mtime,
       last_commit_at: null,
       commits_30d: 0,
       commits_90d: 0,
       indexed_at: now,
-      symbols_done: 1, // mark done to avoid infinite retry
+      symbols_done: 1,
     });
     pathToId.set(relPath, fileId);
     pathIndex.add(relPath);
-    return;
+    return null;
   }
 
   const text = buf.toString("utf8");
@@ -185,7 +213,32 @@ function processFile(
   pathToId.set(relPath, fileId);
   pathIndex.add(relPath);
 
-  // Symbol + import extraction (only for supported languages)
+  // Cache the text so Phase B avoids a second read.
+  return { fileId, text, lang };
+}
+
+/**
+ * Phase B: extract symbols + imports, resolve refs, store everything.
+ * Requires pathToId to already contain ALL files being processed this pass
+ * (populated by Phase A), so refs resolve regardless of declaration order.
+ *
+ * NOTE: must be called INSIDE an open transaction.
+ *
+ * Residual caveat (acceptable, test-only): if `maxFiles` truncated the work
+ * list, a ref whose target falls outside the truncation won't resolve this
+ * pass — it will be picked up in the next pass once the target is indexed.
+ * `maxFiles` is only used in tests; the real worker never sets it.
+ */
+function extractAndStore(
+  db: Db,
+  relPath: string,
+  fileId: number,
+  text: string,
+  lang: Lang | null,
+  config: NavigatorConfig,
+  pathIndex: Set<string>,
+  pathToId: Map<string, number>,
+): void {
   const isSupported = lang !== null && (config.languages as string[]).includes(lang);
   let symbolNames = "";
   let kindTags = "";
@@ -197,7 +250,6 @@ function processFile(
     const kindSet = new Set(syms.map((s) => s.kind));
     kindTags = Array.from(kindSet).join(" ");
 
-    // Resolve import edges
     const rawImports = extractImports(lang as Lang, text);
     const edges: { dstFileId: number; kind: string }[] = [];
     for (const { toPathHint, kind } of rawImports) {
@@ -233,25 +285,26 @@ export function runIndexPass(
   const now = Date.now();
   const { batchSize, priority, maxFiles } = opts;
 
-  // Build path index and id map from what's already in the DB (for ref resolution)
+  // Enumerate once; reuse the result in deriveBacklog (Fix 3: single traverse).
+  const enumerated = enumerateFiles(root);
+
+  // Build path index and id map from what's already in the DB (for ref resolution).
   const allIndexed = getAllFiles(db);
   const pathIndex = new Set<string>(allIndexed.map((r) => r.path));
   const pathToId = new Map<string, number>(allIndexed.map((r) => [r.path, r.id]));
 
-  // Also add all enumerated files to pathIndex (for resolving refs to not-yet-indexed files)
-  // We need to know candidate paths exist on disk even before indexing them.
-  const enumerated = enumerateFiles(root);
+  // Seed pathIndex with all on-disk paths so relative imports can always be
+  // resolved by path even before a target file's row exists in the DB.
   for (const { path } of enumerated) {
     pathIndex.add(path);
   }
 
-  // Derive backlog
-  const { files: backlogFiles, needsCochange } = deriveBacklog(db, root, config);
+  // Derive backlog using the already-enumerated list (no second traversal).
+  const { files: backlogFiles, needsCochange } = deriveBacklog(db, root, config, enumerated);
 
-  // Build the work list: priority first (deduped), then backlog remainder
+  // Build work list: priority first (deduped), then backlog remainder.
   const prioritySet = new Set(priority);
   const workList: string[] = [];
-
   for (const p of priority) {
     if (pathIndex.has(p)) workList.push(p);
   }
@@ -259,16 +312,25 @@ export function runIndexPass(
     if (!prioritySet.has(p)) workList.push(p);
   }
 
-  // Truncate if maxFiles is set
   const toProcess = maxFiles !== undefined ? workList.slice(0, maxFiles) : workList;
 
-  // Process in batches (each batch is one BEGIN IMMEDIATE … COMMIT)
+  // ---- Phase A: upsert all file shells so pathToId is complete ----
+  // After this loop, pathToId contains every previously-indexed file PLUS
+  // every file being processed this pass, so Phase B ref resolution never
+  // misses a target due to processing order.
+  //
+  // phaseACache maps relPath → PhaseAResult for text files that need Phase B.
+  const phaseACache = new Map<string, PhaseAResult>();
+
   for (let i = 0; i < toProcess.length; i += batchSize) {
     const batch = toProcess.slice(i, i + batchSize);
     try {
       db.exec("BEGIN IMMEDIATE");
       for (const relPath of batch) {
-        processFile(db, root, relPath, config, pathIndex, pathToId, now);
+        const result = upsertFileShell(db, root, relPath, config, pathIndex, pathToId, now);
+        if (result !== null) {
+          phaseACache.set(relPath, result);
+        }
       }
       db.exec("COMMIT");
     } catch (err) {
@@ -277,12 +339,40 @@ export function runIndexPass(
     }
   }
 
-  // Co-change + recency (when needed and files exist in index)
+  // ---- Phase B: extract symbols + imports + refs for all text files ----
+  // pathToId is now fully populated, so ref resolution works regardless of
+  // the order files were processed in Phase A.
+  const phaseAKeys = Array.from(phaseACache.keys());
+  for (let i = 0; i < phaseAKeys.length; i += batchSize) {
+    const batch = phaseAKeys.slice(i, i + batchSize);
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      for (const relPath of batch) {
+        const cached = phaseACache.get(relPath)!;
+        extractAndStore(
+          db,
+          relPath,
+          cached.fileId,
+          cached.text,
+          cached.lang,
+          config,
+          pathIndex,
+          pathToId,
+        );
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+      throw err;
+    }
+  }
+
+  // Co-change + recency (when needed).
   if (needsCochange) {
     buildCochange(db, root, config);
   }
 
-  // Mark full crawl done if backlog is empty after this pass
+  // Mark full crawl done if backlog is empty after this pass.
   if (backlogFiles.length === 0 || (maxFiles === undefined && toProcess.length === backlogFiles.length)) {
     setMeta(db, "full_crawl_done", "1");
   }
@@ -311,7 +401,6 @@ function buildCochange(db: Db, root: string, config: NavigatorConfig): void {
   const allRows = getAllFiles(db);
   const pathToId = new Map<string, number>(allRows.map((r) => [r.path, r.id]));
 
-  // Inline recency update (can't add a new exported query — update inline)
   const updateRecency = db.prepare(
     "UPDATE files SET last_commit_at=?, commits_30d=?, commits_90d=? WHERE path=?",
   );
@@ -329,7 +418,6 @@ function buildCochange(db: Db, root: string, config: NavigatorConfig): void {
     throw err;
   }
 
-  // Upsert co-change weights
   try {
     db.exec("BEGIN IMMEDIATE");
     for (const [key, weight] of cochange) {
@@ -346,7 +434,8 @@ function buildCochange(db: Db, root: string, config: NavigatorConfig): void {
     throw err;
   }
 
-  // Advance the cursor
+  // cochange_scanned_through marks the full-scan as done (not an incremental
+  // resume cursor — the full co-change graph is rebuilt whenever head changes).
   const oldest = commits.at(-1);
   setMeta(db, "cochange_scanned_through", oldest?.sha ?? "done");
   setMeta(db, "head_sha_at_index", headSha(root) ?? "");
