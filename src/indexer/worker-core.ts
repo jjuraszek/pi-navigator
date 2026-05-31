@@ -262,7 +262,12 @@ function extractAndStore(
     replaceRefs(db, fileId, edges);
   }
 
-  ftsUpsert(db, fileId, relPath, symbolNames, kindTags);
+  // Only source files (lang !== null) enter the FTS index.  Generated
+  // artefacts like package-lock.json have no symbols and their path tokens
+  // would pollute BM25 scores for source-navigation queries.
+  if (lang !== null) {
+    ftsUpsert(db, fileId, relPath, symbolNames, kindTags);
+  }
   setSymbolsDone(db, fileId, 1);
 }
 

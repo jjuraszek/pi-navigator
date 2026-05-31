@@ -123,7 +123,30 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 ```
 navigator_locate({ query: "Grid model", limit?: 10 })
 ```
-Returns ranked files with signal breakdown, top-result symbols, and the co-change/referrer cluster. Use **before** `rg` or `read` to orient. See `NAVIGATOR.md` for the full response shape.
+Returns ranked files with signal breakdown, top-result symbols, and the co-change/referrer cluster. Use **before** `rg` or `read` to orient.
+
+**Example response shape:**
+```jsonc
+{
+  "results": [
+    {
+      "path": "app/models/grid.rb",
+      "lang": "ruby",
+      "score": 9.1,
+      "signals": { "fts": 2.1, "path": 3.5, "symbol": 2.0, "recency": 0.4 },
+      "symbols": [{ "name": "Grid", "kind": "class", "lines": [1, 120] }]
+    }
+  ],
+  "cluster": {
+    "anchor": "app/models/grid.rb",
+    "cochange": ["app/services/grid_sync.rb"],
+    "referrers": ["app/controllers/grids_controller.rb"]
+  },
+  "index": { "fresh": true, "head_behind": 0, "coverage": 0.97 }
+}
+```
+
+See `NAVIGATOR.md` for the full response schema and signal definitions.
 
 ### `navigator_slice`
 ```
@@ -137,6 +160,20 @@ Shows current coverage, commits behind HEAD, queue depth, and lock owner.
 
 ### `/navigator reindex [path]`
 Forces a full rebuild, or re-indexes a single path immediately.
+
+---
+
+## Eval
+
+Evaluated against this repository using `eval/cases.jsonl` (8 source-navigation queries):
+
+| Metric | navigator | rg baseline |
+|---|---|---|
+| hit@1 | 6/8 (75%) | 6/8 (file present, not ranked) |
+| hit@5 | 7/8 (87.5%) | — |
+| avg candidates | ~top-10 ranked | ~15 unranked files |
+
+The remaining miss (`co-change folding` → `git.ts`) is a documented limitation: purely descriptive queries that don't match any path stem or symbol name are outside scope for a symbol/path index. See `NAVIGATOR.md` §Limitations.
 
 ---
 

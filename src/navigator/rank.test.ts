@@ -2,16 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { score, pathMatch, recencyBoost, DEFAULT_WEIGHTS } from "./rank.ts";
 
-test("score applies weights additively (symbol weighted 2x)", () => {
+test("score applies weights additively — values derived from DEFAULT_WEIGHTS", () => {
+  // fts+symbol only
   const s = { fts: 1, path: 0, symbol: 1, recency: 0 };
-  assert.equal(score(s), 1 * 1 + 0 + 2 * 1 + 0); // 3
-  assert.equal(score({ fts: 0, path: 1, symbol: 0, recency: 0 }), 1);
+  assert.equal(score(s), DEFAULT_WEIGHTS.fts + DEFAULT_WEIGHTS.symbol);
+  // path only
+  assert.equal(score({ fts: 0, path: 1, symbol: 0, recency: 0 }), DEFAULT_WEIGHTS.path);
 });
 
-test("exact-symbol signal outranks path-only", () => {
-  const symbolHit = score({ fts: 2, path: 0, symbol: 1, recency: 0 }); // 2 + 2 = 4
-  const pathOnly = score({ fts: 2, path: 1, symbol: 0, recency: 0 });  // 2 + 1 = 3
-  assert.ok(symbolHit > pathOnly);
+test("symbol signal always adds to score; exact stem beats substring path", () => {
+  // symbol weight > 0: adding symbol always increases total
+  const withSym = score({ fts: 1, path: 0.5, symbol: 1, recency: 0 });
+  const noSym   = score({ fts: 1, path: 0.5, symbol: 0, recency: 0 });
+  assert.ok(withSym > noSym, "symbol signal must increase score");
+  // exact stem match (pathMatch=1.0) beats substring (0.5) all else equal
+  const exactPath = score({ fts: 1, path: 1.0, symbol: 0, recency: 0 });
+  const subPath   = score({ fts: 1, path: 0.5, symbol: 0, recency: 0 });
+  assert.ok(exactPath > subPath, "exact path stem must beat substring");
 });
 
 test("pathMatch: basename stem hit = 1, segment substring = 0.5, miss = 0", () => {

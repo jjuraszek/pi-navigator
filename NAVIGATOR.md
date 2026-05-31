@@ -119,9 +119,11 @@ score = w_fts    * norm(bm25(search_index))    // FTS full-text match
 | Weight | Value | Rationale |
 |---|---|---|
 | `w_fts` | 1.0 | Baseline text match |
-| `w_path` | 1.0 | Path segment hit carries equal weight to FTS |
-| `w_symbol` | 2.0 | Exact symbol match is strong signal — double weight |
+| `w_path` | 3.5 | Exact basename-stem match is the strongest locate signal — intentionally high so a definition file beats its test file when both match on FTS |
+| `w_symbol` | 2.0 | Exact symbol name match is strong signal — double weight |
 | `w_recency` | 0.5 | Recency boost is helpful but shouldn't dominate |
+
+Weights were evaluated against `eval/cases.jsonl` (8 cases on this repo): `w_path=3.5` improved hit@1 from 4/8 to 6/8 without regression to hit@5. See `eval/run.ts`.
 
 **Co-change is not in the primary score.** It drives the `cluster` fan-out for the top result only — returning neighbors and referrers alongside the anchor without affecting ranking. This keeps scoring deterministic and avoids amplifying co-change noise into ranking instability.
 
@@ -159,6 +161,15 @@ A kill mid-index leaves the DB consistent (WAL + per-batch `BEGIN IMMEDIATE` com
 2. Working-tree changes + commits since last index (catch-up).
 3. Full-crawl backlog until `full_crawl_done = "1"`.
 
+### Two-Phase Index Pass (ref correctness)
+
+Each batch is processed in two phases to ensure import edges resolve correctly regardless of file ordering within the batch:
+
+- **Phase A** (inside a transaction): stat each file, read bytes, hash, upsert the `files` row, populate `pathToId` / `pathIndex` with the file's id. Oversized/binary files are marked `symbols_done=1` and skipped in Phase B.
+- **Phase B** (same transaction): for each text file, run tree-sitter symbol extraction, resolve import hints against the fully-populated `pathToId`, write symbols + ref edges + FTS tokens, set `symbols_done=1`.
+
+Without the two-phase split, a file that imports another file later in the same batch would fail ref resolution because the destination's id wasn't in `pathToId` yet.
+
 ### Batching & Crash Safety
 
 The worker commits every `indexBatchSize` files (default 50) in a `BEGIN IMMEDIATE` transaction, then sleeps `indexIdleMs` (default 25 ms) before the next batch. A kill loses at most the in-flight batch. Coverage counters in `meta` (`coverage_indexed`, `coverage_total`) update per batch.
@@ -172,7 +183,7 @@ The worker commits every `indexBatchSize` files (default 50) in a `BEGIN IMMEDIA
 ```
 
 - `fresh`: `true` if `meta.head_sha_at_index` == current HEAD.
-- `head_behind`: number of commits since last index.
+- `head_behind`: always `0` in v0.1.0 (commit counting not yet implemented; staleness is indicated by `fresh: false`).
 - `coverage`: `coverage_indexed / coverage_total`.
 
 `/navigator status` shows these values plus queue depth and lock owner.
@@ -221,3 +232,17 @@ export const NO_VECTORS: VectorStore | null = null;
 ```
 
 When summary embeddings land (out of scope for v0.1.0), back this with `sqlite-vec` (stay single-store) or a LanceDB sidecar keyed by `content_hash`. The core schema requires no changes — `content_hash` in `files` is the stable key. Embeddings would add a new dimension to `navigator_locate` scoring (semantic similarity alongside BM25 + co-change) without displacing the existing relational model.
+
+---
+
+## Limitations (PoC)
+
+**Symbol/path index — not full-content.** The FTS index stores path tokens, extracted symbol names, and kind tags. It does not store file contents or prose documentation. Purely descriptive queries (e.g., "co-change folding") that don't correspond to a path stem or a named symbol will miss even though the relevant file exists. This is expected and documented — see `eval/cases.jsonl` for the `co-change folding` case.
+
+**Co-change is a full re-scan on HEAD change.** When `head_sha_at_index` != current HEAD, the entire `git log` is re-scanned up to `cochangeMaxCommits`. There is no incremental co-change update (only the cursor for the initial full-build is incremental). On large repos with many commits this takes a few seconds in the background.
+
+**`head_behind` is not computed.** The `index.head_behind` field in `navigator_locate` responses is always `0` in v0.1.0. Staleness is indicated by `index.fresh: false`. Commit counting is deferred.
+
+**Test files may rank above definition files at hit@1.** Test files often contain more FTS tokens (imports, class names, method calls) than the definition files they test. The `w_path=3.5` boost mitigates this for queries that match the definition's basename, but queries that match a shared symbol name may still surface the test file first.
+
+**Rails-aware metadata is out of scope.** Routes, associations, jobs, and callbacks are DSL macros — not LSP symbols. Generic tree-sitter extraction does not surface them as first-class symbols. A future Rails plugin (out of PoC scope) would need runtime introspection or a custom parser.

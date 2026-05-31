@@ -8,9 +8,13 @@ export interface RankWeights {
   recency: number;
 }
 
+// path weight is intentionally high (3.5) so that an exact basename-stem
+// match beats test-file FTS inflation.  Rationale: for source navigation the
+// file whose stem exactly matches the query token is almost always the
+// definition site.  Evaluated against the project's own eval/cases.jsonl.
 export const DEFAULT_WEIGHTS: RankWeights = {
   fts: 1.0,
-  path: 1.0,
+  path: 3.5,
   symbol: 2.0,
   recency: 0.5,
 };

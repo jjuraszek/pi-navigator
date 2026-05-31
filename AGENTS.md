@@ -162,6 +162,39 @@ pi-navigator/
 
 ---
 
+## Build Conventions (hard-won, do not regress)
+
+### Relative imports MUST use the `.ts` extension
+
+```ts
+// CORRECT — Node 24 native type-stripping requires the real on-disk extension
+import { openDb } from "./store/db.ts";
+import type { Db } from "./store/db.ts";
+
+// WRONG — Node 24 strip-types does NOT resolve extensionless relative imports
+import { openDb } from "./store/db";  // → ERR_MODULE_NOT_FOUND at runtime
+```
+
+Node 24 strip-types erases type annotations but does **not** perform module resolution magic. Every `import`/`export` from a local `.ts` file must name the file with `.ts`. This differs from bundlers (Vite, esbuild) that do resolve extensionless imports.
+
+### `node:sqlite` is loaded lazily via `createRequire`
+
+`node:sqlite` is an experimental Node 24 built-in. A static `import { DatabaseSync } from "node:sqlite"` fires the `ExperimentalWarning` before `process.emitWarning` can be overridden. Use `createRequire` in `src/store/db.ts` to load it lazily after the suppressor is installed. See `src/store/db.ts` for the pattern.
+
+### `typebox` import specifier
+
+```ts
+import { Type } from "typebox";  // runtime alias provided by the pi framework
+```
+
+Do NOT import from `@sinclair/typebox` directly. The `tsconfig.json` `paths` map resolves `"typebox"` to the type declaration during typecheck; at runtime pi provides the module under the `"typebox"` specifier.
+
+### FTS indexes source files only
+
+Only files where `lang !== null` (recognized source language) enter the FTS virtual table. Generated artefacts (`package-lock.json`, JSON config, etc.) are stored in the `files` table but excluded from FTS to prevent BM25 score pollution.
+
+---
+
 ## Verification Commands
 
 ```bash
@@ -173,6 +206,9 @@ node --test
 
 # run a specific test file
 node --test src/store/db.test.ts
+
+# run the eval harness (hit@k vs rg baseline)
+node eval/run.ts --repo <path>
 
 # load the extension locally for a session
 pi -e ~/repos/pi-navigator/index.ts
