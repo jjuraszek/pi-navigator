@@ -1,0 +1,1 @@
+This repository has a navigator index. Call navigator_locate before grepping to find entry points and related files; use navigator_slice to read exact spans. A slice marked unchanged_since_last_read does not need re-reading.
