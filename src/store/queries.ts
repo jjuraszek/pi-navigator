@@ -132,8 +132,9 @@ export function upsertCochange(db: Db, aId: number, bId: number, weight: number)
 /**
  * Upsert a file's FTS tokens.
  * Contentless FTS5 does NOT support plain DELETE; use the special FTS5
- * delete-command insert (row with first column = 'delete') to remove the old
- * entry, then re-insert with updated tokens.
+ * standard DELETE + INSERT so that FTS5 can maintain its index correctly.
+ * The FTS5 table stores content (no content=''), so SELECT returns real values
+ * and standard DML works.
  */
 export function ftsUpsert(
   db: Db,
@@ -142,21 +143,10 @@ export function ftsUpsert(
   symbolNames: string,
   kindTags: string,
 ): void {
-  // Check whether a row already exists; only send the delete command if so.
-  // The delete command requires the stored column values to match exactly.
-  const existing = db
-    .prepare("SELECT path, symbol_names, kind_tags FROM search_index WHERE rowid = ?")
-    .get(fileId) as { path: string; symbol_names: string; kind_tags: string } | undefined;
+  // Standard DELETE removes the old FTS entry (and its indexed tokens) by rowid.
+  db.prepare("DELETE FROM search_index WHERE rowid = ?").run(fileId);
 
-  if (existing) {
-    // FTS5 special delete-command: first column value is the literal string 'delete'.
-    db
-      .prepare(
-        "INSERT INTO search_index(search_index, rowid, path, symbol_names, kind_tags) VALUES('delete', ?, ?, ?, ?)",
-      )
-      .run(fileId, existing.path, existing.symbol_names, existing.kind_tags);
-  }
-
+  // INSERT adds the new tokens. The FTS5 engine indexes all three columns.
   db
     .prepare(
       "INSERT INTO search_index (rowid, path, symbol_names, kind_tags) VALUES (?, ?, ?, ?)",

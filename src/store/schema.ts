@@ -1,6 +1,6 @@
 import type { Db } from "./db.ts";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -25,9 +25,9 @@ CREATE TABLE IF NOT EXISTS refs (
   dst_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, PRIMARY KEY (src_file, dst_file, kind));
 CREATE INDEX IF NOT EXISTS idx_refs_dst ON refs(dst_file);
--- contentless FTS5: rowid MUST equal files.id (writer discipline; enforced in queries layer)
+-- FTS5: rowid == files.id. Stores content so SELECT returns non-null values.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
-  path, symbol_names, kind_tags, content='', tokenize='unicode61');
+  path, symbol_names, kind_tags, tokenize='unicode61');
 `;
 
 export function migrate(db: Db): void {
