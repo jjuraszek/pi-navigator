@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.1.0] - 2026-05-31
+
 Proof of concept.
 
 ### Added

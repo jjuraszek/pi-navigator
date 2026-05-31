@@ -1,14 +1,23 @@
 {
   "name": "pi-navigator",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "pi extension: worktree-aware repository navigator for faster find-read-update",
   "type": "module",
-  "keywords": ["pi-package", "pi-extension"],
+  "keywords": [
+    "pi-package",
+    "pi-extension"
+  ],
   "license": "MIT",
   "pi": {
-    "extensions": ["./index.ts"],
-    "skills": ["./skills/navigator/SKILL.md"],
-    "prompts": ["./prompts/navigator-persona.md"]
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills/navigator/SKILL.md"
+    ],
+    "prompts": [
+      "./prompts/navigator-persona.md"
+    ]
   },
   "dependencies": {
     "web-tree-sitter": "^0.25.0"
