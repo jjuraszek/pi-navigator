@@ -1,0 +1,8 @@
+{"query": "locate", "expect": ["src/navigator/locate.ts"]}
+{"query": "co-change folding", "expect": ["src/indexer/git.ts"]}
+{"query": "writer lock", "expect": ["src/store/lock.ts"]}
+{"query": "slice verified cache", "expect": ["src/navigator/slice.ts", "src/navigator/verified-cache.ts"]}
+{"query": "ranking weights score", "expect": ["src/navigator/rank.ts"]}
+{"query": "symbol extraction tree-sitter", "expect": ["src/indexer/symbols.ts"]}
+{"query": "rolling indexer worker", "expect": ["src/indexer/rolling.ts", "src/indexer/worker-core.ts"]}
+{"query": "schema migrate", "expect": ["src/store/schema.ts"]}
