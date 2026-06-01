@@ -1,6 +1,6 @@
 import type { Db } from "./db.ts";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -25,16 +25,35 @@ CREATE TABLE IF NOT EXISTS refs (
   dst_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, PRIMARY KEY (src_file, dst_file, kind));
 CREATE INDEX IF NOT EXISTS idx_refs_dst ON refs(dst_file);
--- FTS5: rowid == files.id.
--- Deliberate divergence from spec §5.6 (which specifies content='' contentless):
--- we store path, symbol_names, and kind_tags as real columns so SELECT returns
--- non-null values for ranking. These are metadata strings only — NOT file contents.
--- The no-contents invariant (spec §10 / AGENTS.md) is preserved.
+-- standard stored FTS5 (NOT content=''), inverted index over tracked source only,
+-- no original byte layout retained.
+-- 'content' holds lowercase identifier fragments split from symbol names (NOT raw
+-- source text), preserving the no-file-contents invariant.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
-  path, symbol_names, kind_tags, tokenize='unicode61');
+  path, symbol_names, keywords, content, tokenize='porter unicode61');
 `;
 
 export function migrate(db: Db): void {
+  db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+
+  const stored = (
+    db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as
+      | { value: string }
+      | undefined
+  )?.value;
+  const storedVersion = stored ? parseInt(stored, 10) : 0;
+
+  if (storedVersion > 0 && storedVersion < SCHEMA_VERSION) {
+    // Atomic cleanup: all three must succeed or none, to avoid a half-migrated DB.
+    db.exec("BEGIN IMMEDIATE");
+    db.exec("DROP TABLE IF EXISTS search_index");
+    db.exec("UPDATE files SET symbols_done=0");
+    db.exec(
+      "DELETE FROM meta WHERE key IN ('head_sha_at_index','cochange_scanned_through','full_crawl_done')",
+    );
+    db.exec("COMMIT");
+  }
+
   db.exec(DDL);
   db.prepare(
     "INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",

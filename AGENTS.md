@@ -12,7 +12,7 @@ pi-navigator is a pi coding-agent extension. It maintains a worktree-aware, self
 
 **The thesis:** the agent loop has two cost phases — *find/orient* (many exploratory `rg`/`read` calls) and *read-to-verify* (opening real bytes before editing). The index collapses phase 1 into one lookup; it makes phase 2 cheaper (smaller slices, hash-verified, non-repeating) but never replaces it.
 
-**Storage:** `node:sqlite` (FTS5, WAL) at `~/.pi/pi-navigator-cache/<repo_name>_<repo_id>.db`. The DB stores no file contents — only paths, symbols, offsets, and hashes.
+**Storage:** `node:sqlite` (FTS5, WAL) at `~/.pi/pi-navigator-cache/<repo_name>_<repo_id>.db`. The DB stores no contents for secret or gitignored files. Tracked source is indexed as a keyword inverted index (derived tokens only; no raw byte layout).
 
 ---
 
@@ -237,7 +237,7 @@ CI runs `npm run typecheck` then `node --test` on every push (`.github/workflows
 
 | Invariant | Why |
 |---|---|
-| **The DB stores no file contents** | Privacy + freshness. Only paths, symbols, byte/line offsets, and hashes are persisted. Slice content is always read live from disk. |
+| **The DB stores no contents for secret or gitignored files** | Secret globs (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`) and gitignored files are never walked. Tracked, non-secret source is indexed as a standard FTS5 inverted index over **derived tokens** (split-identifier fragments from symbol names plus comment/string-literal text) — a recoverable bag-of-words, never the original byte layout. Slice content is always read live from the active worktree. |
 | **Only the lock holder writes the index** | Prevents duplicate indexing across worktrees, subagents, and concurrent sessions. Non-holders run read-only. |
 | **Slices always read the active worktree** | Ground-truth correctness. The index is a navigation approximation; it must never be the source of bytes for an edit. |
 | **Secret globs are always ignored** | `.env*`, `*.pem`, `*.key`, `id_*`, `*.p12` are excluded from walk and never sliced. |

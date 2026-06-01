@@ -12,6 +12,8 @@ export interface NavigatorConfig {
   cochangeMaxCommits: number;
   cochangeMaxFilesPerCommit: number;
   maxFileBytes: number;
+  keywordStoplist: string[];    // extra stoplist terms appended to defaults; default []
+  keywordMinLength: number;     // drop keyword tokens shorter than this; default 3
 }
 
 export interface FileRecord {
@@ -37,7 +39,7 @@ export interface SymbolRecord {
   end_byte: number;
 }
 
-export interface ImportEdge { fromPath: string; toPathHint: string; kind: "import" | "require" | "require_relative"; }
+export interface ImportEdge { fromPath: string; toPathHint: string; kind: "import" | "require" | "require_relative" | "ruby_const"; }
 
 export interface LocateSignals { fts: number; path: number; symbol: number; recency: number; }
 export interface LocateResult {

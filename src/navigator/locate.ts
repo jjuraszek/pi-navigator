@@ -1,8 +1,8 @@
 import type { Db } from "../store/db.ts";
-import { getMeta, getCoverage } from "../store/queries.ts";
+import { getMeta, getCoverage, refFanIn } from "../store/queries.ts";
 import { headSha } from "../worktree.ts";
 import { countCommitsBetween } from "../indexer/git.ts";
-import { score, pathMatch, recencyBoost } from "./rank.ts";
+import { score, pathMatch, recencyBoost, COLUMN_WEIGHTS, applyTestPenalty } from "./rank.ts";
 import type {
   NavigatorConfig,
   LocateResponse,
@@ -31,7 +31,6 @@ interface FtsRow {
   b: number; // bm25 value — negative; more negative = better match
   path: string;
   symbol_names: string;
-  kind_tags: string;
 }
 
 interface FileMeta {
@@ -72,17 +71,18 @@ export function locate(
   if (!matchExpr) return empty;
 
   // --- FTS search (bm25 is negative; more negative = better) ---
+  const [w_path, w_sym, w_kw, w_content] = COLUMN_WEIGHTS.order;
   let ftsRows: FtsRow[];
   try {
     ftsRows = db
       .prepare(
-        `SELECT rowid, bm25(search_index) AS b, path, symbol_names, kind_tags
+        `SELECT rowid, bm25(search_index, ?, ?, ?, ?) AS b, path, symbol_names
          FROM search_index
          WHERE search_index MATCH ?
          ORDER BY b ASC
          LIMIT 200`,
       )
-      .all(matchExpr) as unknown as FtsRow[];
+      .all(w_path, w_sym, w_kw, w_content, matchExpr) as unknown as FtsRow[];
   } catch {
     // FTS syntax error (e.g. special tokens that slip through) → no results
     return empty;
@@ -131,7 +131,7 @@ export function locate(
     const recency = recencyBoost(meta.commits_30d, meta.last_commit_at, nowSeconds);
 
     const signals: LocateSignals = { fts, path: pathSig, symbol: symbolSig, recency };
-    const totalScore = score(signals);
+    const totalScore = applyTestPenalty(score(signals), row.path);
 
     scored.push({ row, meta, totalScore, signals });
   }
@@ -189,17 +189,34 @@ export function locate(
       .map((r) => (idToPathStmt.get(r.other_id) as { path: string } | undefined)?.path)
       .filter((p): p is string => p !== undefined);
 
-    // referrers: files that import/require the anchor
-    const referrerRows = db
-      .prepare(
-        `SELECT f.path FROM refs r JOIN files f ON f.id = r.src_file WHERE r.dst_file = ? LIMIT 10`,
-      )
-      .all(anchorId) as { path: string }[];
+    // referrers: files that import/require the anchor — suppressed when fan-in is
+    // too high (> REF_DF_CAP_PCT of all files), since listing every caller of a
+    // hub file is noise not signal.
+    //
+    // Scope note (spec §8.3): refFanIn counts only ruby_const edges, so Rails hub
+    // constants are correctly capped. The referrer list itself may include
+    // import/require edges (TS/JS), meaning high-fan-in TS/JS hub modules are NOT
+    // throttled in this iteration — deliberate, matching current spec scope.
+    const REF_DF_CAP_PCT = 0.2;
+    const totalFiles = Math.max(1, cov.total);
+    const overCap = refFanIn(db, anchorId) / totalFiles > REF_DF_CAP_PCT;
+
+    let referrerPaths: string[];
+    if (overCap) {
+      referrerPaths = [];
+    } else {
+      const referrerRows = db
+        .prepare(
+          `SELECT f.path FROM refs r JOIN files f ON f.id = r.src_file WHERE r.dst_file = ? LIMIT 10`,
+        )
+        .all(anchorId) as { path: string }[];
+      referrerPaths = referrerRows.map((r) => r.path);
+    }
 
     cluster = {
       anchor: anchor.path,
       cochange: cochangePaths,
-      referrers: referrerRows.map((r) => r.path),
+      referrers: referrerPaths,
     };
   }
 

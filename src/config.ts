@@ -15,10 +15,20 @@ export const DEFAULT_CONFIG: NavigatorConfig = {
   cochangeMaxCommits: 4000,
   cochangeMaxFilesPerCommit: 50,
   maxFileBytes: 1048576,
+  keywordStoplist: [],
+  keywordMinLength: 3,
 };
 
 export function mergeConfig(partial: Partial<NavigatorConfig>): NavigatorConfig {
-  return { ...DEFAULT_CONFIG, ...partial };
+  const merged = { ...DEFAULT_CONFIG, ...partial };
+  merged.keywordStoplist = Array.isArray(partial.keywordStoplist)
+    ? partial.keywordStoplist.map((s) => String(s).toLowerCase())
+    : DEFAULT_CONFIG.keywordStoplist;
+  merged.keywordMinLength =
+    Number.isInteger(partial.keywordMinLength) && (partial.keywordMinLength as number) > 0
+      ? (partial.keywordMinLength as number)
+      : DEFAULT_CONFIG.keywordMinLength;
+  return merged;
 }
 
 function agentDir(): string {

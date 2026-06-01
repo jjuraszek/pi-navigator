@@ -141,17 +141,32 @@ export function ftsUpsert(
   fileId: number,
   path: string,
   symbolNames: string,
-  kindTags: string,
+  keywords: string,
+  content: string,
 ): void {
-  // Standard DELETE removes the old FTS entry (and its indexed tokens) by rowid.
   db.prepare("DELETE FROM search_index WHERE rowid = ?").run(fileId);
-
-  // INSERT adds the new tokens. The FTS5 engine indexes all three columns.
   db
     .prepare(
-      "INSERT INTO search_index (rowid, path, symbol_names, kind_tags) VALUES (?, ?, ?, ?)",
+      "INSERT INTO search_index (rowid, path, symbol_names, keywords, content) VALUES (?, ?, ?, ?, ?)",
     )
-    .run(fileId, path, symbolNames, kindTags);
+    .run(fileId, path, symbolNames, keywords, content);
+}
+
+// ---------------------------------------------------------------------------
+// Reference fan-in
+// ---------------------------------------------------------------------------
+
+/**
+ * Count distinct source files that reference dstFileId via a ruby_const edge.
+ * Used for ranking: high fan-in signals a central/widely-used file.
+ */
+export function refFanIn(db: Db, dstFileId: number): number {
+  const row = db
+    .prepare(
+      "SELECT COUNT(DISTINCT src_file) AS n FROM refs WHERE dst_file = ? AND kind = 'ruby_const'",
+    )
+    .get(dstFileId) as { n: number };
+  return row.n;
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,29 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Added
+- **Content-aware search.** `search_index` widened to four porter-stemmed FTS5
+  columns (`path`, `symbol_names`, `keywords`, `content`). Keyword tokens are
+  derived deterministically (no LLM) from split identifiers, symbol names, and
+  comment/string-literal text, filtered by length floor, numeric/hex/URL drops,
+  and layered stoplists (per-language + cross-language + user `keywordStoplist`).
+  Terms that appear only in a comment or string are now searchable.
+- **Rails-aware referrers.** Ruby constant references are extracted and resolved
+  Zeitwerk-style (inflection-free `underscoreConst`) to populate the referrer
+  graph for autoloaded code; over-referenced hubs are suppressed by a locate-time
+  df-cap.
+- **Config:** `navigator.keywordStoplist` (extra stoplist terms, appended to
+  defaults) and `navigator.keywordMinLength` (default 3).
+
+### Changed
+- **Ranking:** column-weighted BM25 (`COLUMN_WEIGHTS`) plus a multiplicative
+  test-file penalty (`TEST_GLOBS`) applied last, so implementation files
+  outrank their tests for the same query.
+- **Schema v3** with a version-aware migration that drops the old `search_index`
+  and forces a full re-derive on upgrade.
+- **Invariant clarified:** the index stores only derived, tokenized bag-of-words
+  (never raw byte layout); secret and gitignored files are never indexed.
+
 ## [v0.1.0] - 2026-05-31
 
 Proof of concept.

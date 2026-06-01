@@ -45,7 +45,10 @@ function parseArgs(): { repo: string; k: number } {
 
 interface EvalCase {
   query: string;
-  expect: string[];
+  expect?: string[];
+  expect_prefix?: string;
+  expect_contains?: string;
+  expect_not_suffix?: string;
 }
 
 function loadCases(): EvalCase[] {
@@ -54,7 +57,8 @@ function loadCases(): EvalCase[] {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l) as EvalCase);
+    .map((l) => JSON.parse(l) as EvalCase)
+    .filter((c) => c.expect || c.expect_prefix || c.expect_contains || c.expect_not_suffix !== undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +71,7 @@ interface RgResult {
   available: boolean; // false if rg not installed / errored
 }
 
-function rgBaseline(query: string, repo: string, expect: string[]): RgResult {
+function rgBaseline(query: string, repo: string, expect: string[] | undefined): RgResult {
   try {
     // Use the first 1-2 non-trivial tokens (skip stopwords, short words)
     const tokens = query.split(/\s+/).filter((t) => t.length > 3);
@@ -85,7 +89,7 @@ function rgBaseline(query: string, repo: string, expect: string[]): RgResult {
     const candidateCount = files.length;
 
     // Normalise rg output to repo-relative POSIX paths
-    const present = expect.some((exp) =>
+    const present = (expect ?? []).some((exp) =>
       files.some((f) => {
         const rel = relative(repo, resolve(repo, f)).split("\\").join("/");
         return rel.includes(exp) || exp.includes(rel);
@@ -104,6 +108,46 @@ function rgBaseline(query: string, repo: string, expect: string[]): RgResult {
 
 function pathMatchesExpect(path: string, expect: string[]): boolean {
   return expect.some((exp) => path.includes(exp) || exp.includes(path));
+}
+
+function evalHits(
+  results: Array<{ path: string }>,
+  c: EvalCase,
+  k: number,
+): { hit1: boolean; hitK: boolean } {
+  if (results.length === 0) return { hit1: false, hitK: false };
+
+  const top1 = results[0].path;
+  const topK = results.slice(0, k).map((r) => r.path);
+
+  // expect_not_suffix: #1 result must NOT end with suffix
+  if (c.expect_not_suffix !== undefined) {
+    const ok = !top1.endsWith(c.expect_not_suffix);
+    return { hit1: ok, hitK: ok };
+  }
+
+  // expect_prefix: some top-k result starts with prefix
+  if (c.expect_prefix !== undefined) {
+    const hitK = topK.some((p) => p.startsWith(c.expect_prefix!));
+    const hit1 = top1.startsWith(c.expect_prefix!);
+    return { hit1, hitK };
+  }
+
+  // expect_contains: some top-k result includes substring
+  if (c.expect_contains !== undefined) {
+    const hitK = topK.some((p) => p.includes(c.expect_contains!));
+    const hit1 = top1.includes(c.expect_contains!);
+    return { hit1, hitK };
+  }
+
+  // expect: existing exact-match logic
+  if (c.expect) {
+    const hit1 = pathMatchesExpect(top1, c.expect);
+    const hitK = topK.some((p) => pathMatchesExpect(p, c.expect!));
+    return { hit1, hitK };
+  }
+
+  return { hit1: false, hitK: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,11 +202,9 @@ async function main(): Promise<void> {
       try {
         const res = locate(db, repo, c.query, DEFAULT_CONFIG);
 
-        if (res.results.length > 0) {
-          caseHit1 = pathMatchesExpect(res.results[0].path, c.expect);
-          const topK = res.results.slice(0, k);
-          caseHitK = topK.some((r) => pathMatchesExpect(r.path, c.expect));
-        }
+        const hits = evalHits(res.results, c, k);
+        caseHit1 = hits.hit1;
+        caseHitK = hits.hitK;
 
         rgResult = rgBaseline(c.query, repo, c.expect);
       } catch (err) {

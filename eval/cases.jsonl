@@ -6,3 +6,6 @@
 {"query": "symbol extraction tree-sitter", "expect": ["src/indexer/symbols.ts"]}
 {"query": "rolling indexer worker", "expect": ["src/indexer/rolling.ts", "src/indexer/worker-core.ts"]}
 {"query": "schema migrate", "expect": ["src/store/schema.ts"]}
+{"query": "schema migration version", "expect": ["src/store/schema.ts"]}
+{"query": "keyword extraction stoplist", "expect": ["src/indexer/keywords.ts"]}
+{"query": "test file penalty ranking", "expect": ["src/navigator/rank.ts"]}

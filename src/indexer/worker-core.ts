@@ -17,7 +17,8 @@ import {
 import { hashBuffer, isBinary } from "./hash.ts";
 import { enumerateFiles, langOf } from "./walk.ts";
 import { readLog, foldSignals } from "./git.ts";
-import { extractSymbols, extractImports } from "./symbols.ts";
+import { extractSymbols, extractImports, extractText } from "./symbols.ts";
+import { extractKeywords, buildStoplist, splitIdentifier } from "./keywords.ts";
 import { headSha } from "../worktree.ts";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,38 @@ export function deriveBacklog(
   const needsCochange = storedHead !== currentHead || !fullCrawlDone || !cochangeCursor;
 
   return { files: needsWork, needsCochange };
+}
+
+// ---------------------------------------------------------------------------
+// Ruby constant resolution (Zeitwerk-style)
+// ---------------------------------------------------------------------------
+
+/** Convert a Ruby constant name (e.g. 'OrdersController', 'User::Profile') to a Zeitwerk path stem. */
+function underscoreConst(name: string): string {
+  return name
+    .split("::")
+    .map((seg) =>
+      seg
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .toLowerCase()
+    )
+    .join("/");
+}
+
+/**
+ * Resolve a Ruby constant reference to repo-relative .rb paths in pathIndex.
+ * Matches if path equals candidate or ends with '/'+candidate.
+ */
+function resolveRubyConst(name: string, pathIndex: Set<string>): string[] {
+  const candidate = underscoreConst(name) + ".rb";
+  const results: string[] = [];
+  for (const p of pathIndex) {
+    if (p === candidate || p.endsWith("/" + candidate)) {
+      results.push(p);
+    }
+  }
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,24 +273,34 @@ function extractAndStore(
   pathToId: Map<string, number>,
 ): void {
   const isSupported = lang !== null && (config.languages as string[]).includes(lang);
+  let symNameList: string[] = [];
   let symbolNames = "";
-  let kindTags = "";
+  let textTokens: string[] = [];
 
   if (isSupported && lang !== null) {
     const syms = extractSymbols(lang as Lang, text);
     replaceSymbols(db, fileId, syms);
-    symbolNames = syms.map((s) => s.name).join(" ");
-    const kindSet = new Set(syms.map((s) => s.kind));
-    kindTags = Array.from(kindSet).join(" ");
+    symNameList = syms.map((s) => s.name);
+    symbolNames = symNameList.join(" ");
+    textTokens = extractText(lang as Lang, text);
 
     const rawImports = extractImports(lang as Lang, text);
     const edges: { dstFileId: number; kind: string }[] = [];
     for (const { toPathHint, kind } of rawImports) {
-      const resolved = resolveImport(toPathHint, kind, relPath, pathIndex);
-      if (!resolved || resolved === relPath) continue;
-      const dstId = pathToId.get(resolved);
-      if (dstId === undefined) continue;
-      edges.push({ dstFileId: dstId, kind });
+      if (kind === "ruby_const") {
+        for (const resolved of resolveRubyConst(toPathHint, pathIndex)) {
+          if (resolved === relPath) continue;
+          const dstId = pathToId.get(resolved);
+          if (dstId === undefined) continue;
+          edges.push({ dstFileId: dstId, kind: "ruby_const" });
+        }
+      } else {
+        const resolved = resolveImport(toPathHint, kind, relPath, pathIndex);
+        if (!resolved || resolved === relPath) continue;
+        const dstId = pathToId.get(resolved);
+        if (dstId === undefined) continue;
+        edges.push({ dstFileId: dstId, kind });
+      }
     }
     replaceRefs(db, fileId, edges);
   }
@@ -266,7 +309,17 @@ function extractAndStore(
   // artefacts like package-lock.json have no symbols and their path tokens
   // would pollute BM25 scores for source-navigation queries.
   if (lang !== null) {
-    ftsUpsert(db, fileId, relPath, symbolNames, kindTags);
+    const stoplist = buildStoplist(lang, config.keywordStoplist);
+    const keywords = extractKeywords([...symNameList, ...textTokens], stoplist, config.keywordMinLength).join(" ");
+    const contentTokens = new Set<string>();
+    for (const name of symNameList) {
+      for (const frag of splitIdentifier(name)) contentTokens.add(frag);
+    }
+    for (const t of textTokens) {
+      for (const frag of splitIdentifier(t)) contentTokens.add(frag);
+    }
+    const content = Array.from(contentTokens).join(" ");
+    ftsUpsert(db, fileId, relPath, symbolNames, keywords, content);
   }
   setSymbolsDone(db, fileId, 1);
 }

@@ -1,4 +1,4 @@
-# NAVIGATOR — Technical Reference
+# NAVIGATOR - Technical Reference
 
 Deep documentation for the pi-navigator extension. Covers the database schema, ranking algorithm, rolling/resumable indexing design, worktree and lock model, and the vector-embedding expansion seam.
 
@@ -6,7 +6,7 @@ Deep documentation for the pi-navigator extension. Covers the database schema, r
 
 ## Database Schema
 
-The index lives at `~/.pi/pi-navigator-cache/<repo_name>_<repo_id>.db`. It uses `node:sqlite` with WAL mode and foreign keys enabled. **No table stores file contents** — only metadata, symbol names, byte/line offsets, and hashes.
+The index lives at `~/.pi/pi-navigator-cache/<repo_name>_<repo_id>.db`. It uses `node:sqlite` with WAL mode and foreign keys enabled. Secret globs and gitignored files are never walked; tracked source is indexed as a keyword inverted index (derived tokens only - no original byte layout).
 
 ### `meta`
 
@@ -22,7 +22,7 @@ Key/value store for index-level state.
 | `coverage_total` | Total file count in the worktree |
 | `coverage_indexed` | Files fully indexed (hash + symbols + FTS) |
 | `cochange_scanned_through` | Oldest commit SHA folded into co-change; resume cursor |
-| `full_crawl_done` | `"0"` or `"1"` — whether the full walk has completed |
+| `full_crawl_done` | `"0"` or `"1"` - whether the full walk has completed |
 
 ### `files`
 
@@ -79,61 +79,178 @@ Import/require edges between files.
 ```sql
 src_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
 dst_file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-kind TEXT NOT NULL,             -- "import"|"require"|"require_relative"
+kind TEXT NOT NULL,             -- "import"|"require"|"require_relative"|"ruby_const"
 PRIMARY KEY (src_file, dst_file, kind)
 ```
 
 "Who refers to this file" query: `SELECT src_file FROM refs WHERE dst_file = ?`.
 
+`ruby_const` edges are written for Rails autoloaded constants (see §Ruby Referrers). They are structurally identical to other `refs` edges; the `kind` column enables the df-cap to filter them separately at query time.
+
 ### `search_index` (FTS5)
 
-Contentless full-text index for BM25 search.
+Standard stored FTS5 table (NOT `content=''`). Stores an inverted index over four columns for content-aware BM25 search. **No original file bytes are retained** - only tokenized fragments derived from symbol names, comment/string-literal text, and path segments (a recoverable bag-of-words, never the original byte layout). Secret and gitignored files are never indexed.
+
+**Schema version: 3** (porter stemmer, 4 columns - upgraded from the earlier 3-column `unicode61` table).
 
 ```sql
 CREATE VIRTUAL TABLE search_index USING fts5(
-  path,
-  symbol_names,
-  kind_tags,
-  content='',                   -- contentless: tokens only, no stored content
-  tokenize='unicode61'
+  path,          -- path segments split on / _ - . and camelCase
+  symbol_names,  -- tree-sitter symbol names, space-joined
+  keywords,      -- filtered keyword tokens from symbol names + comment/string text (see §Keyword Extraction)
+  content,       -- full split-identifier stream; catch-all recall, demoted at rank time
+  tokenize = 'porter unicode61'
 );
 ```
 
-Rowid corresponds to `files.id`. `bm25(search_index)` is verified available in `node:sqlite` on Node 24 (including inside a `worker_thread` with WAL). A `summary` column is intentionally absent; adding it is additive if LLM summaries land.
+Rowid == `files.id`. Only files with `lang != null` enter `search_index` (generated artefacts stay out to prevent BM25 score pollution). `bm25(search_index, w1, w2, w3, w4)` is called with per-column weights (see §Ranking). A `summary` column is intentionally absent; adding it is additive if LLM summaries land.
+
+**Migration (v2 → v3):** `migrate()` detects `schema_version < SCHEMA_VERSION`, drops `search_index`, resets `symbols_done = 0` on all files, and clears the co-change/crawl cursors so the worker re-derives every row into the new columns. A fresh DB (version 0) skips the reset branch.
 
 ---
 
 ## Ranking Algorithm
 
-`navigator_locate` scores each candidate with a transparent additive formula using fixed constants. No semantic percentages; no tuned ML weights.
+`navigator_locate` scores each candidate with a transparent additive formula using fixed constants. Fully deterministic - no semantic percentages, no ML weights.
 
 ```
-score = w_fts    * norm(bm25(search_index))    // FTS full-text match
+score = w_fts    * norm(bm25(search_index, w_col_path, w_col_sym, w_col_kw, w_col_content))
       + w_path   * pathMatch(query, path)       // basename/segment exact hit
       + w_symbol * symbolExactMatch(query)      // exact symbol name match
       + w_recency * recencyBoost(file)          // commits_30d, last_commit_at
 ```
 
-**Default constants** (in `src/navigator/rank.ts`):
+Then multiplied by the test-file penalty (see below), applied last.
+
+### Signal fusion weights (`DEFAULT_WEIGHTS` in `src/navigator/rank.ts`)
 
 | Weight | Value | Rationale |
 |---|---|---|
 | `w_fts` | 1.0 | Baseline text match |
-| `w_path` | 3.5 | Exact basename-stem match is the strongest locate signal — intentionally high so a definition file beats its test file when both match on FTS |
-| `w_symbol` | 2.0 | Exact symbol name match is strong signal — double weight |
+| `w_path` | 3.5 | Exact basename-stem match is the strongest locate signal |
+| `w_symbol` | 2.0 | Exact symbol name match is strong signal |
 | `w_recency` | 0.5 | Recency boost is helpful but shouldn't dominate |
 
-Weights were evaluated against `eval/cases.jsonl` (8 cases on this repo): `w_path=3.5` improved hit@1 from 4/8 to 6/8 without regression to hit@5. See `eval/run.ts`.
+Weights were evaluated against `eval/cases.jsonl`: `w_path=3.5` improved hit@1 from 4/8 to 6/8 without regression to hit@5.
 
-**Co-change is not in the primary score.** It drives the `cluster` fan-out for the top result only — returning neighbors and referrers alongside the anchor without affecting ranking. This keeps scoring deterministic and avoids amplifying co-change noise into ranking instability.
+### BM25 column weights (`COLUMN_WEIGHTS` in `src/navigator/rank.ts`)
 
-Constants are tuned against the eval harness (`eval/cases.jsonl` → `eval/run.ts` hit@k) as the index matures.
+The FTS5 `bm25()` call receives per-column multipliers so path and symbol hits outweigh body boilerplate.
+
+| Column | Weight | Role |
+|---|---|---|
+| `path` | 4.0 | Strongest locator (matches today's path-first behavior) |
+| `symbol_names` | 3.0 | Definition sites |
+| `keywords` | 2.0 | Domain-term recall |
+| `content` | 0.5 | Catch-all recall - demoted so large-file noise cannot dominate |
+
+### Porter stemming
+
+`tokenize='porter unicode61'` (was `unicode61` in schema v2). Fixes `migration`↔`migrate`, `calculation`↔`calculate` across all columns. The porter stemmer is applied at index time and query time by FTS5 - no extra work at locate time.
+
+### Test-file deprioritization (`TEST_GLOBS`, `applyTestPenalty`)
+
+A multiplicative penalty (`DEFAULT_TEST_PENALTY = 0.5`) is applied **last**, to the fully fused composite score, for files matching `TEST_GLOBS`:
+
+- `spec/` or `test[s]/` anywhere in path
+- `*_spec.*`, `*_test.*` suffixes
+- `*.test.ts`, `*.spec.tsx`, etc.
+- `test_*.py` prefix
+
+Demotion, not exclusion: test files still surface when they are the only/best match. A definition file with equal FTS match always ranks above its spec file.
+
+**Application order:** `applyTestPenalty(score(signals), path)` is called after `score()`; never applied to individual signals.
+
+### Co-change is not in the primary score
+
+Co-change drives the `cluster` fan-out for the top result only - returning neighbors and referrers alongside the anchor without affecting ranking. This keeps scoring deterministic and avoids amplifying co-change noise into ranking instability.
+
+All constants are tunable against the eval harness (`eval/cases.jsonl` → `eval/run.ts` hit@k).
+
+---
+
+## Keyword Extraction (`src/indexer/keywords.ts`)
+
+Keywords are harvested **at index time** from data already in memory - no extra file reads, no model.
+
+### Token sources
+
+- **Symbol names** from tree-sitter (`extractSymbols`): class/module/function/method/const names.
+- **Comment + string-literal text** from tree-sitter (`extractText`): comment nodes and string-literal nodes (`string`, plus `template_string` for ts/js). Comment markers and quote characters act as natural delimiters when the text is split.
+- Every source string is split into fragments (`splitIdentifier`) and filtered (see below). Only derived, split, filtered tokens are stored — never the raw literal or comment text.
+
+The `keywords` column receives the **filtered** high-signal fragment set (symbol + comment + string tokens); the `content` column receives the **unfiltered** split-identifier stream (every fragment, deduped) for catch-all recall.
+
+### `splitIdentifier` - camelCase / snake_case / acronym splitting
+
+```
+createUser   →  ["create", "user"]
+HTTPServer   →  ["http", "server"]
+power_flow   →  ["power", "flow"]
+Billing::Invoice → ["billing", "invoice"]  (after scope resolution)
+```
+
+### Filter pipeline (applied before `keywords` column, in order)
+
+1. Lowercase + dedupe per file.
+2. **Length floor:** drop tokens shorter than `keywordMinLength` (default **3**). Drops noise like `i`, `j`, `db`, `os`.
+3. **Char-class drop:** pure-numeric, hex strings ≥6 chars, URL-scheme tokens.
+4. **Stoplists** (see below).
+
+### Stoplists
+
+Three layers, merged into a `Set<string>` per file:
+
+| Layer | Applied to |
+|---|---|
+| `DEFAULT_STOPLISTS[lang]` | Language keywords (Ruby `def end class module ...`; Python `def class return ...`; TS/JS `function const let var ...`) |
+| `DEFAULT_CROSS_LANG_STOPLIST` | Code-noise (`todo fixme xxx hack tmp temp foo bar baz qux`) + common English stopwords (`the a an and or of to in ...`) |
+| `config.keywordStoplist` | User-supplied extras, appended to defaults (never replaces) |
+
+Domain terms (`plant`, `voltage`, `grid`, `invoice`) are **never hardcoded into stoplists**. Corpus-common domain terms are handled by BM25-IDF at query time, not static exclusion.
+
+### Config (`navigator` namespace, all optional)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `keywordStoplist` | `[]` | Extra stoplist terms appended to defaults |
+| `keywordMinLength` | `3` | Drop keyword tokens shorter than this |
+
+---
+
+## Ruby Referrers & Cluster Fan-out
+
+Rails autoloads (Zeitwerk) - models/controllers are never `require`d. Before this feature, `refs` was effectively empty for Rails repos, so the referrer half of the cluster never fired.
+
+### Constant-reference extraction (`src/indexer/symbols.ts`)
+
+`extractImports` emits `{ toPathHint, kind: "ruby_const" }` for tree-sitter `constant` and `scope_resolution` (`Foo::Bar`) nodes in Ruby files. The raw constant name is the hint; resolution happens in the indexer.
+
+### Resolution-as-filter (`src/indexer/worker-core.ts`)
+
+A `ruby_const` edge is written **only when the constant resolves to a file in the index**. This drops `Time`, `Logger`, `Rails`, `ActiveRecord`, and all stdlib/gem constants for free - no denylist needed.
+
+**Algorithm (`underscoreConst` + suffix match):**
+1. Underscore the constant name without pluralization (`User` → `user`, `UsersController` → `users_controller`, `Billing::Invoice` → `billing/invoice`, `HTTPServer` → `http_server`).
+2. Form candidate path `<underscored>.rb`.
+3. Match against `files` rows by suffix: `path === candidate || path.endsWith('/' + candidate)`.
+4. Zero matches → no edge. Multiple matches → emit an edge to each (subject to df-cap).
+
+### df-cap at locate time (`src/navigator/locate.ts`, `refFanIn`)
+
+Hub constants like `ApplicationRecord` and `ApplicationController` resolve to real files but are referenced by nearly every model/controller. Listing every caller as a referrer is noise, not signal.
+
+**Cap:** when a cluster anchor's `ruby_const` fan-in exceeds `REF_DF_CAP_PCT` (20%) of all files, the referrer list is suppressed entirely for that anchor.
+
+- `refFanIn(db, anchorId)` - `COUNT(DISTINCT src_file)` over `refs WHERE dst_file = ? AND kind = 'ruby_const'`.
+- Computed live at query time from the current `refs` state; no maintained global table, no re-extraction when fan-in shifts.
+- The cap applies only to `ruby_const` edges. TS/JS `import`/`require` referrers are unaffected in this iteration.
 
 ---
 
 ## Rolling / Resumable Indexing
 
-Indexing runs in an async `worker_thread` — the main thread is never blocked. Progress is durable: a killed session resumes from database state, not an in-memory queue.
+Indexing runs in an async `worker_thread` - the main thread is never blocked. Progress is durable: a killed session resumes from database state, not an in-memory queue.
 
 ### Main Thread Triggers
 
@@ -211,11 +328,11 @@ A `<db>.lock` file carries `{ pid, mtime }`. Lock acquisition:
 - On session shutdown → release the lock, terminate the worker.
 - On `turn_end` → refresh the lock's mtime to prevent stale reclaim while the session is active.
 
-Writers use `BEGIN IMMEDIATE` transactions to avoid write contention. Readers (`locate`, `slice`) always proceed without locking under WAL. N parallel subagents on the same repo produce one indexer (the lock holder) and N-1 read-only consumers — no duplicate indexing, no prompt-tax amplification.
+Writers use `BEGIN IMMEDIATE` transactions to avoid write contention. Readers (`locate`, `slice`) always proceed without locking under WAL. N parallel subagents on the same repo produce one indexer (the lock holder) and N-1 read-only consumers - no duplicate indexing, no prompt-tax amplification.
 
 ### Branch Divergence
 
-The index reflects the worktree it was most recently built from. When another worktree on a different branch is active, `locate` may surface files from that branch. Results carry `index.fresh` to signal this. Slice and the verified-cache are always against the **active worktree's real bytes** — divergence never causes an incorrect read or edit.
+The index reflects the worktree it was most recently built from. When another worktree on a different branch is active, `locate` may surface files from that branch. Results carry `index.fresh` to signal this. Slice and the verified-cache are always against the **active worktree's real bytes** - divergence never causes an incorrect read or edit.
 
 ---
 
@@ -231,18 +348,16 @@ export interface VectorStore {
 export const NO_VECTORS: VectorStore | null = null;
 ```
 
-When summary embeddings land (out of scope for v0.1.0), back this with `sqlite-vec` (stay single-store) or a LanceDB sidecar keyed by `content_hash`. The core schema requires no changes — `content_hash` in `files` is the stable key. Embeddings would add a new dimension to `navigator_locate` scoring (semantic similarity alongside BM25 + co-change) without displacing the existing relational model.
+When summary embeddings land (out of scope for v0.1.0), back this with `sqlite-vec` (stay single-store) or a LanceDB sidecar keyed by `content_hash`. The core schema requires no changes - `content_hash` in `files` is the stable key. Embeddings would add a new dimension to `navigator_locate` scoring (semantic similarity alongside BM25 + co-change) without displacing the existing relational model.
 
 ---
 
 ## Limitations (PoC)
 
-**Symbol/path index — not full-content.** The FTS index stores path tokens, extracted symbol names, and kind tags. It does not store file contents or prose documentation. Purely descriptive queries (e.g., "co-change folding") that don't correspond to a path stem or a named symbol will miss even though the relevant file exists. This is expected and documented — see `eval/cases.jsonl` for the `co-change folding` case.
+**Token sources: symbol names + comment/string-literal text + path segments.** The `keywords` and `content` FTS columns are derived from split-identifier fragments of tree-sitter symbol names plus the text of comment and string-literal nodes (`extractText`). A query whose terms appear in none of those (e.g. prose that lives only outside the indexed source files) remains out of scope. Semantic/embedding search is still deferred to the `vectors.ts` seam.
 
 **Co-change is a full re-scan on HEAD change.** When `head_sha_at_index` != current HEAD, the entire `git log` is re-scanned up to `cochangeMaxCommits`. There is no incremental co-change update (only the cursor for the initial full-build is incremental). On large repos with many commits this takes a few seconds in the background.
 
 **`head_behind` is not computed.** The `index.head_behind` field in `navigator_locate` responses is always `0` in v0.1.0. Staleness is indicated by `index.fresh: false`. Commit counting is deferred.
 
-**Test files may rank above definition files at hit@1.** Test files often contain more FTS tokens (imports, class names, method calls) than the definition files they test. The `w_path=3.5` boost mitigates this for queries that match the definition's basename, but queries that match a shared symbol name may still surface the test file first.
-
-**Rails-aware metadata is out of scope.** Routes, associations, jobs, and callbacks are DSL macros — not LSP symbols. Generic tree-sitter extraction does not surface them as first-class symbols. A future Rails plugin (out of PoC scope) would need runtime introspection or a custom parser.
+**Rails-aware metadata is out of scope.** Routes, associations, jobs, and callbacks are DSL macros — not LSP symbols. Generic tree-sitter extraction does not surface them as first-class symbols. A future Rails plugin would need runtime introspection or a custom parser.

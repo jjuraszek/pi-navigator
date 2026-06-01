@@ -14,6 +14,7 @@ import {
   replaceRefs,
   upsertCochange,
   ftsUpsert,
+  refFanIn,
   setMeta,
   getMeta,
   getCoverage,
@@ -54,13 +55,44 @@ test("upsertFile inserts then updates (no duplicate)", () => {
 test("ftsUpsert is idempotent and searchable", () => {
   const db = freshDb();
   const id = upsertFile(db, baseRec);
-  ftsUpsert(db, id, "app/grid.rb", "Grid sync", "class method");
-  ftsUpsert(db, id, "app/grid.rb", "Grid sync", "class method"); // re-index, no dup
+  ftsUpsert(db, id, "app/grid.rb", "Grid sync", "renderer layout", "class Grid def sync end");
+  ftsUpsert(db, id, "app/grid.rb", "Grid sync", "renderer layout", "class Grid def sync end"); // re-index, no dup
   const hits = db
     .prepare("SELECT rowid FROM search_index WHERE search_index MATCH ?")
     .all("Grid") as { rowid: number }[];
   assert.equal(hits.length, 1);
   assert.equal(hits[0].rowid, id);
+});
+
+test("ftsUpsert stores keywords and content — MATCH on keyword finds rowid", () => {
+  const db = freshDb();
+  const id = upsertFile(db, baseRec);
+  ftsUpsert(db, id, "app/grid.rb", "Grid", "renderer", "class Grid end");
+  const byKeyword = db
+    .prepare("SELECT rowid FROM search_index WHERE search_index MATCH ?")
+    .all("renderer") as { rowid: number }[];
+  assert.equal(byKeyword.length, 1);
+  assert.equal(byKeyword[0].rowid, id);
+  const byContent = db
+    .prepare("SELECT rowid FROM search_index WHERE search_index MATCH ?")
+    .all("renderer") as { rowid: number }[];
+  assert.equal(byContent.length, 1);
+});
+
+test("refFanIn returns distinct ruby_const src count for a dst file", () => {
+  const db = freshDb();
+  const a = upsertFile(db, { ...baseRec, path: "a.rb" });
+  const b = upsertFile(db, { ...baseRec, path: "b.rb" });
+  const c = upsertFile(db, { ...baseRec, path: "c.rb" });
+  const dst = upsertFile(db, { ...baseRec, path: "dst.rb" });
+
+  // a → dst (ruby_const), b → dst (ruby_const), c → dst (require_relative — excluded)
+  db.prepare("INSERT INTO refs (src_file, dst_file, kind) VALUES (?, ?, ?)").run(a, dst, "ruby_const");
+  db.prepare("INSERT INTO refs (src_file, dst_file, kind) VALUES (?, ?, ?)").run(b, dst, "ruby_const");
+  db.prepare("INSERT INTO refs (src_file, dst_file, kind) VALUES (?, ?, ?)").run(c, dst, "require_relative");
+
+  assert.equal(refFanIn(db, dst), 2);
+  assert.equal(refFanIn(db, a), 0); // no incoming ruby_const refs
 });
 
 test("replaceSymbols replaces, getCoverage counts, meta roundtrips", () => {

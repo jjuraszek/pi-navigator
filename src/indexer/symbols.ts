@@ -143,7 +143,15 @@ type RawImport = { toPathHint: string; kind: ImportEdge["kind"] };
 
 function collectImports(node: Node, lang: Lang, out: RawImport[]): void {
   if (lang === "ruby") {
-    if (node.type === "call") {
+    if (node.type === "scope_resolution") {
+      const full = node.text;
+      if (/^[A-Z][A-Za-z0-9_:]*$/.test(full)) {
+        out.push({ toPathHint: full, kind: "ruby_const" });
+        return; // don't descend — children would double-emit
+      }
+    } else if (node.type === "constant") {
+      out.push({ toPathHint: node.text, kind: "ruby_const" });
+    } else if (node.type === "call") {
       const method = node.childForFieldName("method")?.text;
       if (method === "require" || method === "require_relative") {
         const argList = node.childForFieldName("arguments");
@@ -213,6 +221,44 @@ function collectImports(node: Node, lang: Lang, out: RawImport[]): void {
   for (const child of namedKids(node)) {
     collectImports(child, lang, out);
   }
+}
+
+// ---- Comment + string-literal text extraction ----
+
+/** String-literal node types per language (do not descend into these to avoid double-walking interpolation). */
+const STRING_NODE_TYPES: Record<Lang, ReadonlySet<string>> = {
+  ruby: new Set(["string"]),
+  python: new Set(["string"]),
+  ts: new Set(["string", "template_string"]),
+  js: new Set(["string", "template_string"]),
+};
+
+function collectText(node: Node, lang: Lang, out: string[]): void {
+  if (node.type === "comment") {
+    out.push(node.text);
+    return; // comments have no meaningful named children
+  }
+  if (STRING_NODE_TYPES[lang].has(node.type)) {
+    out.push(node.text);
+    return; // do not descend — avoids double-walking interpolation fragments
+  }
+  for (const child of namedKids(node)) {
+    collectText(child, lang, out);
+  }
+}
+
+/**
+ * Return raw text of all comment nodes and string-literal nodes in source.
+ * Comment markers (#, //, /*) and quote characters act as natural delimiters
+ * when the caller passes these strings through splitIdentifier/extractKeywords.
+ * Never stores raw bytes in the DB — only the derived tokens matter.
+ */
+export function extractText(lang: Lang, source: string): string[] {
+  const tree = getParser(lang).parse(source);
+  if (!tree) return [];
+  const out: string[] = [];
+  collectText(tree.rootNode, lang, out);
+  return out;
 }
 
 /**

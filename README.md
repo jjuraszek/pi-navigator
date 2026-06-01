@@ -9,7 +9,7 @@ A coding agent rediscovers a repository from scratch every session: multiple exp
 pi-navigator attacks this with six ideas:
 
 ### 1. First-contact orientation
-One call to `navigator_locate("Grid model")` returns the ranked entry points — instead of a grep safari across an unfamiliar codebase. Works on the first turn of a fresh session.
+One call to `navigator_locate("Grid model")` returns ranked entry points — no grep safari, no session warm-up. Search is **deterministic and content-aware** (FTS over path segments, symbol names, and split-identifier keyword tokens from identifiers, comments, and string literals, with porter stemming), not semantic or LLM-driven. Conceptual queries match on extracted terms, not just filenames or exact symbol names.
 
 ### 2. Cross-subproject locate
 A monorepo with 10+ subdirectories means the agent often burns turns just finding the right service. The index knows the whole tree; one query surfaces the right area regardless of project boundaries.
@@ -52,7 +52,7 @@ pi -e ~/repos/pi-navigator/index.ts
 
 Nothing to run. The extension starts a background `worker_thread` on session start that:
 1. Catches up on any commits since the last session.
-2. Re-indexes files you edit immediately (high priority).
+2. Re-indexes files you edit or write immediately (high priority). Bash-driven mutations (`sed`, heredocs, `git checkout`, codegen) are not detected automatically — they are picked up by the next catch-up pass, not instantly.
 3. Drains the full-crawl backlog in small batches between turns.
 
 Indexing is **resumable** — if a session is killed mid-index, the next session continues from where it stopped rather than restarting. Progress is derived from the database state, not an in-memory queue.
@@ -74,8 +74,8 @@ Check progress: `/navigator status`
 
 **Does not:**
 - Replace reading the real file bytes before editing. Any mutation requires ground-truth verification — the index never feeds an edit directly.
-- Index file contents. The database stores paths, symbol names, byte offsets, and hashes only. No secrets are persisted.
-- Provide semantic search (embeddings/summaries are out of scope for v0.1.0; the interface exists for future expansion).
+- Index secret or gitignored file contents. Tracked source files contribute a keyword inverted index (split-identifier fragments from symbol names plus comment/string-literal text; a recoverable bag-of-words, no original byte layout). Secret globs (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`) are never read.
+- Provide semantic (LLM/embedding-based) search. Content-aware FTS is deterministic; semantic search remains a deferred follow-up on the `vectors.ts` seam.
 
 ---
 
@@ -173,7 +173,7 @@ Evaluated against this repository using `eval/cases.jsonl` (8 source-navigation 
 | hit@5 | 7/8 (87.5%) | — |
 | avg candidates | ~top-10 ranked | ~15 unranked files |
 
-The remaining miss (`co-change folding` → `git.ts`) is a documented limitation: purely descriptive queries that don't match any path stem or symbol name are outside scope for a symbol/path index. See `NAVIGATOR.md` §Limitations.
+The remaining miss (`co-change folding` → `git.ts`) is a documented limitation: queries whose terms appear in no path stem, symbol name, comment, or string literal are outside scope for this deterministic index. See `NAVIGATOR.md` §Limitations.
 
 ---
 

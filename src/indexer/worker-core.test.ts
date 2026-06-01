@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -63,4 +63,81 @@ test("ref resolves when importer sorts before target (same pass)", async () => {
   const tid = (db.prepare("SELECT id FROM files WHERE path='z_target.rb'").get() as any).id;
   const rows = db.prepare("SELECT 1 FROM refs WHERE src_file=? AND dst_file=?").all(sid, tid);
   assert.equal(rows.length, 1, "importer-first ref must resolve");
+});
+
+test("ruby constant resolves to app file as ruby_const ref edge", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-rubyconst-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  mkdirSync(join(d, "app", "models"), { recursive: true });
+  mkdirSync(join(d, "app", "controllers"), { recursive: true });
+  writeFileSync(join(d, "app", "models", "user.rb"), "class User; end");
+  writeFileSync(join(d, "app", "controllers", "orders_controller.rb"), "class OrdersController; def create; User.find(1); end; end");
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-db-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  const userRow = db.prepare("SELECT id FROM files WHERE path='app/models/user.rb'").get() as { id: number } | undefined;
+  const ctrlRow = db.prepare("SELECT id FROM files WHERE path='app/controllers/orders_controller.rb'").get() as { id: number } | undefined;
+  assert.ok(userRow, "user.rb must be indexed");
+  assert.ok(ctrlRow, "orders_controller.rb must be indexed");
+  const refs = db.prepare("SELECT kind FROM refs WHERE src_file=? AND dst_file=?").all(ctrlRow!.id, userRow!.id) as { kind: string }[];
+  assert.ok(refs.some((r) => r.kind === "ruby_const"), "orders_controller must have a ruby_const ref to user.rb");
+});
+
+test("unresolvable stdlib constant produces no ref edge", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-stdlib-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  writeFileSync(join(d, "scheduler.rb"), "class Scheduler; def run; Time.now; end; end");
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-db-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  const row = db.prepare("SELECT id FROM files WHERE path='scheduler.rb'").get() as { id: number } | undefined;
+  assert.ok(row, "scheduler.rb must be indexed");
+  const refs = db.prepare("SELECT * FROM refs WHERE src_file=?").all(row!.id);
+  assert.equal(refs.length, 0, "Time (stdlib) must not produce a ref edge");
+});
+
+test("keywords column populated and keyword MATCH finds file", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-kw-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  writeFileSync(join(d, "power_flow.rb"), "class PowerFlow; def calculate; end; end");
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-db-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  const hits = db.prepare("SELECT path FROM search_index WHERE search_index MATCH ?").all("calculate").map((r: any) => r.path) as string[];
+  assert.ok(hits.includes("power_flow.rb"), "FTS keyword match for 'calculate' must find power_flow.rb");
+});
+
+test("comment-only term becomes searchable after indexing", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-comment-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  // 'authentication' appears only in a comment — not in any symbol name or path
+  writeFileSync(join(d, "widget.rb"), [
+    "class Widget",
+    "  # handles authentication retries",
+    "  def run",
+    "  end",
+    "end",
+  ].join("\n"));
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-db-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  const fileRow = db.prepare("SELECT rowid FROM files WHERE path='widget.rb'").get() as { rowid: number } | undefined;
+  assert.ok(fileRow, "widget.rb must be indexed");
+  const hits = db
+    .prepare("SELECT path FROM search_index WHERE search_index MATCH ?")
+    .all("authentication")
+    .map((r: any) => r.path) as string[];
+  assert.ok(hits.includes("widget.rb"), `FTS MATCH 'authentication' must find widget.rb; got: ${hits.join(",")}`);
 });

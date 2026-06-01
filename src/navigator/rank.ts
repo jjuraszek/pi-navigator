@@ -19,6 +19,53 @@ export const DEFAULT_WEIGHTS: RankWeights = {
   recency: 0.5,
 };
 
+/**
+ * BM25 column weights for the FTS5 `bm25()` call.
+ * Higher weight = that column matters more to the relevance score.
+ * content is demoted (0.5) to prevent large-file noise from swamping symbol
+ * and path signals.
+ */
+export const COLUMN_WEIGHTS = {
+  path: 4.0,
+  symbol_names: 3.0,
+  keywords: 2.0,
+  content: 0.5,
+  get order(): [number, number, number, number] {
+    return [this.path, this.symbol_names, this.keywords, this.content];
+  },
+};
+
+export const DEFAULT_TEST_PENALTY = 0.5;
+
+// Patterns that identify test/spec files. Checked in order; first match wins.
+const TEST_GLOBS: RegExp[] = [
+  /(?:^|\/)spec\//,           // spec/ directory anywhere in path
+  /(?:^|\/)tests?\//,         // test/ or tests/ directory anywhere in path
+  /_spec\.[a-z]+$/,           // *_spec.rb  *_spec.py etc.
+  /_test\.[a-z]+$/,           // *_test.rb  *_test.go etc.
+  /\.(?:test|spec)\.[tj]sx?$/, // *.test.ts  *.spec.tsx  *.test.js  *.spec.jsx
+  /(?:^|\/)test_[^/]+$/,      // test_*.py  test_*.rb  at filename start
+];
+
+/** Returns true if `path` looks like a test or spec file. */
+export function isTestPath(path: string): boolean {
+  return TEST_GLOBS.some((re) => re.test(path));
+}
+
+/**
+ * Multiplies `composite` by `penalty` when `path` is a test file.
+ * Leaves the score unchanged for impl files.
+ * Default penalty is DEFAULT_TEST_PENALTY (0.5), demoting tests below
+ * equal-scoring impl files.
+ */
+export function applyTestPenalty(
+  composite: number,
+  path: string,
+  penalty: number = DEFAULT_TEST_PENALTY,
+): number {
+  return isTestPath(path) ? composite * penalty : composite;
+}
+
 export function score(signals: LocateSignals, weights: RankWeights = DEFAULT_WEIGHTS): number {
   return (
     weights.fts * signals.fts +
