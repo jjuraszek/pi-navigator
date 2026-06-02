@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { basename, extname, join, relative, sep } from "node:path";
 import type { Lang } from "../types.ts";
 
@@ -74,21 +74,54 @@ function isGitRepo(root: string): boolean {
   return r.status === 0;
 }
 
-function gitFiles(root: string): string[] {
-  // Use -z (NUL-delimited) to handle filenames with spaces or special chars
-  // without needing to deal with git's core.quotePath escaping.
-  const run = (extra: string[]) =>
-    execFileSync(
-      "git",
-      ["ls-files", "-z", ...extra],
-      { cwd: root, stdio: ["ignore", "pipe", "ignore"] }
-    )
-      .toString()
-      .split("\0")
-      .filter(Boolean);
+// Git tree modes we never index: symlinks (120000) and gitlinks/submodules
+// (160000). Symlinks are skipped because following them either re-enqueues a
+// directory forever (readFileSync → EISDIR) or indexes the link target's
+// content as a duplicate (FTS pollution). The mode comes free in --stage output,
+// so tracked files cost no extra syscall.
+const SKIP_GIT_MODES = new Set(["120000", "160000"]);
 
-  const tracked = run([]);
-  const untracked = run(["--others", "--exclude-standard"]);
+function gitFiles(root: string): string[] {
+  // Tracked files via --stage so we can read each entry's mode and drop
+  // symlinks/gitlinks. -z is NUL-delimited; within a record the format is
+  // "<mode> <object> <stage>\t<path>" (the tab survives -z).
+  const trackedRaw = execFileSync(
+    "git",
+    ["ls-files", "-z", "--stage"],
+    { cwd: root, stdio: ["ignore", "pipe", "ignore"] }
+  )
+    .toString()
+    .split("\0")
+    .filter(Boolean);
+
+  const tracked: string[] = [];
+  for (const rec of trackedRaw) {
+    const tab = rec.indexOf("\t");
+    if (tab === -1) continue;
+    const mode = rec.slice(0, rec.indexOf(" "));
+    if (SKIP_GIT_MODES.has(mode)) continue;
+    tracked.push(rec.slice(tab + 1));
+  }
+
+  // Untracked files carry no git mode; lstat each to drop symlinks.
+  const untrackedRaw = execFileSync(
+    "git",
+    ["ls-files", "-z", "--others", "--exclude-standard"],
+    { cwd: root, stdio: ["ignore", "pipe", "ignore"] }
+  )
+    .toString()
+    .split("\0")
+    .filter(Boolean);
+
+  const untracked: string[] = [];
+  for (const p of untrackedRaw) {
+    try {
+      if (lstatSync(join(root, p)).isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    untracked.push(p);
+  }
 
   // Dedup via Set (a path should not appear in both, but be safe).
   const seen = new Set<string>();
@@ -104,10 +137,13 @@ function walkDir(root: string, rel: string, out: string[]): void {
     const child = join(abs, name);
     let st;
     try {
-      st = statSync(child);
+      st = lstatSync(child);
     } catch {
       continue;
     }
+    // Skip symlinks: following them risks cycles, re-indexing the same content,
+    // or recursing out of the repo. Matches the git-mode filter above.
+    if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
       // Denylist applies to directories only; a regular file named "dist" is fine.
       if (ALWAYS_IGNORE_DIRS.has(name)) continue;

@@ -37,6 +37,20 @@ test("locate ranks the Grid class file first and fans out referrers", async () =
   assert.ok(res.cluster!.referrers.includes("grid_sync.rb"), "referrer fan-out");
 });
 
+test("locate flags confidence: high for an exact symbol, low for non-co-occurring terms", async () => {
+  const { db, root } = await indexedFixture();
+  // Exact class name → top hit anchors on the symbol → high confidence.
+  const exact = locate(db, root, "Grid", DEFAULT_CONFIG);
+  assert.equal(exact.confidence, "high", "exact symbol match should be high-confidence");
+  // Multi-word query whose terms never co-occur in one file → OR fallback → low.
+  const scattered = locate(db, root, "Grid Widget", DEFAULT_CONFIG);
+  assert.equal(scattered.confidence, "low", "non-co-occurring terms should be low-confidence");
+  // No match at all → low confidence, empty results.
+  const none = locate(db, root, "zzznotarealtoken", DEFAULT_CONFIG);
+  assert.equal(none.results.length, 0);
+  assert.equal(none.confidence, "low");
+});
+
 test("test-file penalty: impl outranks spec for equal query", async () => {
   const d = mkdtempSync(join(tmpdir(), "nav-loc-penalty-"));
   const git = (a: string[]) => execFileSync("git", a, { cwd: d });

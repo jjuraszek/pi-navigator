@@ -50,6 +50,10 @@ export interface LocateCluster { anchor: string; cochange: string[]; referrers: 
 export interface LocateResponse {
   results: LocateResult[]; cluster: LocateCluster | null;
   index: { fresh: boolean; head_behind: number; coverage: number };
+  // "low" signals weak recall: query terms don't co-occur in any one file, or the
+  // top hit has no structural (symbol/path) anchor. Callers should fall back to
+  // rg/find/read rather than trust the ranking.
+  confidence: "high" | "low";
 }
 
 export interface SliceResult {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -60,6 +60,39 @@ test("enumerateFiles non-git fallback returns files", () => {
   assert.ok(paths.includes("script.py"), "should find script.py");
   const rb = results.find((f) => f.path === "model.rb");
   assert.equal(rb?.lang, "ruby");
+});
+
+test("enumerateFiles ignores tracked symlinks (file and dir targets)", () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-walk-symlink-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]);
+  writeFileSync(join(d, "real.md"), "# real");
+  mkdirSync(join(d, "realdir"), { recursive: true });
+  writeFileSync(join(d, "realdir/inner.rb"), "class I; end");
+  // symlink to a file (would index duplicate content) and to a dir (would
+  // re-enqueue forever via EISDIR).
+  symlinkSync("real.md", join(d, "link.md"));
+  symlinkSync("realdir", join(d, "linkdir"));
+  git(["add", "-A"]);
+  const paths = enumerateFiles(d).map((f) => f.path).sort();
+  assert.ok(paths.includes("real.md"), "real file should be found");
+  assert.ok(paths.includes("realdir/inner.rb"), "real nested file should be found");
+  assert.ok(!paths.includes("link.md"), "symlinked file must not be indexed");
+  assert.ok(!paths.some((p) => p.startsWith("linkdir")), "symlinked dir must not be walked");
+});
+
+test("enumerateFiles non-git fallback ignores symlinks", () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-walk-symlink-nogit-"));
+  writeFileSync(join(d, "real.rb"), "class R; end");
+  mkdirSync(join(d, "sub"), { recursive: true });
+  writeFileSync(join(d, "sub/x.py"), "pass");
+  symlinkSync("real.rb", join(d, "alias.rb"));
+  symlinkSync("sub", join(d, "sublink"));
+  const paths = enumerateFiles(d).map((f) => f.path).sort();
+  assert.ok(paths.includes("real.rb"), "real file should be found");
+  assert.ok(paths.includes("sub/x.py"), "real nested file should be found");
+  assert.ok(!paths.includes("alias.rb"), "symlinked file must not appear");
+  assert.ok(!paths.some((p) => p.startsWith("sublink")), "symlinked dir must not be walked");
 });
 
 test("langOf maps prose extensions to 'prose'", () => {

@@ -64,7 +64,12 @@ export function locate(
   const head_behind = fresh ? 0 : countCommitsBetween(root, indexHeadSha ?? "");
   const indexStatus = { fresh, head_behind, coverage };
 
-  const empty: LocateResponse = { results: [], cluster: null, index: indexStatus };
+  const empty: LocateResponse = {
+    results: [],
+    cluster: null,
+    index: indexStatus,
+    confidence: "low",
+  };
 
   // --- FTS search (bm25 is negative; more negative = better) ---
   // AND-first: narrow to files containing ALL query terms; fall back to OR only
@@ -90,10 +95,17 @@ export function locate(
 
   const andExpr = buildMatchExpr(query, "AND");
   if (!andExpr) return empty;
+  const queryTokenCount = query.split(/\s+/).filter((t) => t.length > 0).length;
   let ftsRows = runMatch(andExpr);
+  // usedOrFallback: no single file contained ALL query terms, so we widened to
+  // OR. For a multi-term query this is a weak-recall signal worth surfacing.
+  let usedOrFallback = false;
   if (ftsRows.length === 0) {
     const orExpr = buildMatchExpr(query, "OR");
-    if (orExpr) ftsRows = runMatch(orExpr);
+    if (orExpr) {
+      ftsRows = runMatch(orExpr);
+      usedOrFallback = true;
+    }
   }
 
   if (ftsRows.length === 0) return empty;
@@ -174,6 +186,16 @@ export function locate(
     };
   });
 
+  // --- confidence: weak recall → caller should fall back to rg/find/read ---
+  // Low when (a) terms didn't co-occur in any file for a multi-term query, or
+  // (b) the top hit has no structural anchor (matched only on keyword/content,
+  // not symbol name or path). Both are the cases where the prior eval saw the
+  // agent confidently pick a lexically-seductive wrong file.
+  const top = results[0];
+  const topHasAnchor = top.signals.symbol > 0 || top.signals.path > 0;
+  const confidence: "high" | "low" =
+    (usedOrFallback && queryTokenCount >= 2) || !topHasAnchor ? "low" : "high";
+
   // --- cluster fan-out for the top result ---
   const anchor = results[0];
   const anchorId = (fileMetaStmt.get(anchor.path) as FileMeta | undefined)?.id;
@@ -228,5 +250,5 @@ export function locate(
     };
   }
 
-  return { results, cluster, index: indexStatus };
+  return { results, cluster, index: indexStatus, confidence };
 }

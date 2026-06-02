@@ -4,6 +4,26 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Fixed
+- **Symlinks are never indexed.** `gitFiles` reads `git ls-files --stage` and drops
+  modes `120000` (symlink) and `160000` (gitlink); untracked entries are
+  `lstat`-filtered and `walkDir` skips symbolic links. Fixes a worker busy-loop
+  where symlinked directories (`.pi`, `.claude/skills`) re-enqueued every pass
+  forever (`readFileSync` → EISDIR, no row written) so the indexer never idled,
+  and stops symlinked files (`CLAUDE.md` → `AGENTS.md`) from polluting FTS with
+  duplicate content.
+
+### Added
+- **Low-confidence fallback.** `navigator_locate` returns
+  `confidence: "high" | "low"`. Low when a multi-term query had no single file
+  containing all terms (OR-fallback) or the top hit has no symbol/path anchor.
+  Tool output surfaces a `[low-confidence: … verify or fall back to rg/find/read]`
+  hint so the standard `rg`/`find`/`read` loop stays available when recall is weak
+  instead of being suppressed by navigator-first guidance.
+- **Verify-before-asserting guidance.** Tool prompt guidelines now state results
+  are ranked candidates (not verified answers) and to open the top candidate via
+  `read`/`navigator_slice` before asserting on "where is X / where do I start".
+
 ### Added
 - **Content-aware search.** `search_index` widened to four porter-stemmed FTS5
   columns (`path`, `symbol_names`, `keywords`, `content`). Keyword tokens are

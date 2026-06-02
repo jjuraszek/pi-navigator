@@ -36,6 +36,8 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
     promptGuidelines: [
       "Call navigator_locate BEFORE rg/find/read to locate code OR docs: it returns ranked files, co-change, and referrers in a single call.",
       "Use rg only for regex matching or scanning full file contents across many files; use navigator_locate to find where something lives or what relates to it.",
+      "Results are ranked candidates, not verified answers. Before asserting a file is THE place for a 'where is X / where do I start' query, open the top candidate (read or navigator_slice) to confirm — ranking is by signals, not by reading the code.",
+      "If the result is flagged low-confidence (terms don't co-occur, or no symbol/path anchor matched), do NOT trust the top hit blindly: fall back to rg/find/read or refine the query.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Name, symbol, or description to search for" }),
@@ -83,6 +85,11 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
       if (!res.index.fresh) {
         lines.push(
           `  [index coverage: ${Math.round(res.index.coverage * 100)}% — still building]`,
+        );
+      }
+      if (res.results.length > 0 && res.confidence === "low") {
+        lines.push(
+          "  [low-confidence: query terms don't co-occur in one file, or the top hit has no symbol/path anchor — verify the top candidate by reading it, or fall back to rg/find/read]",
         );
       }
 
