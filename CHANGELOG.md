@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.2.2] - 2026-06-02
+
 ### Changed
 - **Git-gated activation.** The navigator now stays fully dormant outside a git
   repository: `session_start` checks `repo.isGit` and, when false, sets an
