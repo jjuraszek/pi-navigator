@@ -32,3 +32,34 @@ test("buildStoplist merges lang + cross-lang + user terms (lowercased)", () => {
   assert.ok(stop.has("todo"));     // cross-lang
   assert.ok(stop.has("foobar"));   // user, lowercased
 });
+
+import { tokenizeProse } from "./keywords.ts";
+
+test("tokenizeProse lowercases, splits on non-[a-z0-9_], applies stoplist + minLen", () => {
+  const stop = buildStoplist("prose", []);
+  const out = tokenizeProse(
+    "# Queue Contracts\n\nThe **QueueWorker** drains the `jobs` table. See doc/x.md.",
+    stop,
+    3,
+  );
+  // markdown markers (#, **, `) are delimiters, never tokens
+  assert.ok(!out.includes("#"));
+  assert.ok(!out.includes("**"));
+  // english stopwords ("the") removed; <3-char tokens removed
+  assert.ok(!out.includes("the"));
+  // real words kept (NOT split on camelCase — prose keeps QueueWorker whole, lowercased)
+  assert.ok(out.includes("queue"));
+  assert.ok(out.includes("contracts"));
+  assert.ok(out.includes("queueworker"));
+  assert.ok(out.includes("jobs"));
+  assert.ok(out.includes("table"));
+});
+
+test("tokenizeProse dedupes and drops numeric/hex/url-scheme tokens", () => {
+  const stop = buildStoplist("prose", []);
+  const out = tokenizeProse("alpha alpha 12345 deadbeef https://x.io/y", stop, 3);
+  assert.equal(out.filter((t) => t === "alpha").length, 1);
+  assert.ok(!out.includes("12345"));
+  assert.ok(!out.includes("deadbeef"));
+  assert.ok(!out.includes("https"));
+});

@@ -1,14 +1,16 @@
 ---
 name: navigator
-description: Use when orienting in a large or unfamiliar repository — finding where something lives, what files change together, or who references a file — before falling back to ripgrep/read.
+description: Use when orienting in a large or unfamiliar repository — finding where something lives (code OR docs), what files change together, or who references a file — before falling back to ripgrep/read.
 ---
 
 ## When to use
 
-- First-contact orientation in a large or unfamiliar codebase (don't start with `rg`).
+- First-contact orientation in a large or unfamiliar codebase — code **or** docs (don't start with `rg`).
 - Cross-subproject locate in a monorepo — "which service owns this concept?"
 - Relationship discovery: what files change together with a given file (co-change neighbors), and what files import/require it (referrers).
 - Reading an exact symbol body instead of fetching a whole file.
+
+**Boundary:** prefer `navigator_locate` to locate code or docs (where is X / where to start / what's related); use `rg` for regex or full-content scans across many files.
 
 ## Tools
 
@@ -30,6 +32,10 @@ navigator_locate("Grid")
 → results[0].path = "dashboard/app/models/grid.rb"
   cluster.referrers = ["dashboard/app/controllers/grids_controller.rb", ...]
   cluster.cochange  = ["dashboard/app/services/grid_sync.rb"]
+
+# Find a doc file covering queue contracts
+navigator_locate("queue contracts")
+→ results[0].path = "doc/QUEUE_CONTRACTS.md"
 
 # Read only the `sync` method of grid.rb
 navigator_slice("dashboard/app/models/grid.rb", symbol: "sync")

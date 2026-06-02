@@ -9,7 +9,7 @@ A coding agent rediscovers a repository from scratch every session: multiple exp
 pi-navigator attacks this with six ideas:
 
 ### 1. First-contact orientation
-One call to `navigator_locate("Grid model")` returns ranked entry points — no grep safari, no session warm-up. Search is **deterministic and content-aware** (FTS over path segments, symbol names, and split-identifier keyword tokens from identifiers, comments, and string literals, with porter stemming), not semantic or LLM-driven. Conceptual queries match on extracted terms, not just filenames or exact symbol names.
+One call to `navigator_locate("Grid model")` returns ranked entry points — no grep safari, no session warm-up. Search covers **code and docs**: FTS over path segments, symbol names, split-identifier keyword tokens from identifiers/comments/string literals, **and prose body tokens from Markdown/text/RST/AsciiDoc files** — with porter stemming. Fully deterministic, not semantic or LLM-driven. Conceptual queries match on extracted terms, not just filenames or exact symbol names.
 
 ### 2. Cross-subproject locate
 A monorepo with 10+ subdirectories means the agent often burns turns just finding the right service. The index knows the whole tree; one query surfaces the right area regardless of project boundaries.
@@ -46,6 +46,16 @@ pi -e git:github.com/jjuraszek/pi-navigator@v0.1.0
 pi -e ~/repos/pi-navigator/index.ts
 ```
 
+### What each install path loads
+
+| Path | Tools | Persona | Skill |
+|---|---|---|---|
+| `pi install` / `pi install -l` (package in settings.json) | ✅ `navigator_locate`, `navigator_slice` | ✅ injected at session start (when `injectPersona: true`) | ✅ `navigator` skill auto-discovered via `pi.skills` in package.json |
+| `pi -e index.ts` (bare `-e`) | ✅ tools loaded | ✅ persona injected | ❌ skill **not** auto-discovered (no settings.json entry) |
+| `pi -e git:...` (one-shot) | ✅ tools loaded | ✅ persona injected | ❌ skill **not** auto-discovered |
+
+For full skill discovery (so the agent auto-consults the `navigator` SKILL.md), use the package-install path. With bare `-e`, tools and the persona nudge are active but the skill file requires explicit loading.
+
 ---
 
 ## How it stays fresh
@@ -74,7 +84,7 @@ Check progress: `/navigator status`
 
 **Does not:**
 - Replace reading the real file bytes before editing. Any mutation requires ground-truth verification — the index never feeds an edit directly.
-- Index secret or gitignored file contents. Tracked source files contribute a keyword inverted index (split-identifier fragments from symbol names plus comment/string-literal text; a recoverable bag-of-words, no original byte layout). Secret globs (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`) are never read.
+- Index secret or gitignored file contents. Tracked source and prose files contribute a keyword inverted index (split-identifier fragments from symbol names plus comment/string-literal text; for prose files, `tokenizeProse` lowercases and splits on non-identifier boundaries — a recoverable bag-of-words, no original byte layout). Secret globs (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`) are never read.
 - Provide semantic (LLM/embedding-based) search. Content-aware FTS is deterministic; semantic search remains a deferred follow-up on the `vectors.ts` seam.
 
 ---
@@ -104,7 +114,7 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 | Key | Default | Notes |
 |---|---|---|
 | `enabled` | `true` | Master switch. |
-| `injectPersona` | `false` | Append a ~25-word prompt hint when navigator tools are active. Off by default — tool descriptions carry the nudge at zero ambient cost. |
+| `injectPersona` | `true` | Inject a system-prompt line when navigator tools are active, asserting navigator-first orientation before rg/find/read. Set to `false` to opt out. |
 | `indexDir` | `~/.pi/pi-navigator-cache` | Index location. Filename: `<repo_name>_<repo_id>.db`. |
 | `languages` | `["ruby","python","ts","js"]` | Languages for symbol extraction. |
 | `maxLocateResults` | `10` | Max results from `navigator_locate`. |

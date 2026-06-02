@@ -17,13 +17,13 @@ function ftsEscape(token: string): string {
 }
 
 /**
- * Build a tolerant FTS5 MATCH expression: split query into whitespace tokens,
- * escape each, join with OR.  Returns null when there are no usable tokens.
+ * Build an FTS5 MATCH expression joining escaped tokens with the given joiner
+ * (AND or OR). Returns null when there are no usable tokens.
  */
-function buildMatchExpr(query: string): string | null {
+function buildMatchExpr(query: string, joiner: "AND" | "OR"): string | null {
   const tokens = query.split(/\s+/).filter((t) => t.length > 0);
   if (tokens.length === 0) return null;
-  return tokens.map(ftsEscape).join(" OR ");
+  return tokens.map(ftsEscape).join(` ${joiner} `);
 }
 
 interface FtsRow {
@@ -66,26 +66,34 @@ export function locate(
 
   const empty: LocateResponse = { results: [], cluster: null, index: indexStatus };
 
-  // --- build FTS query ---
-  const matchExpr = buildMatchExpr(query);
-  if (!matchExpr) return empty;
-
   // --- FTS search (bm25 is negative; more negative = better) ---
+  // AND-first: narrow to files containing ALL query terms; fall back to OR only
+  // when AND yields zero rows (emptiness, not sparsity). A single precise result
+  // must never be diluted by OR re-running.
   const [w_path, w_sym, w_kw, w_content] = COLUMN_WEIGHTS.order;
-  let ftsRows: FtsRow[];
-  try {
-    ftsRows = db
-      .prepare(
-        `SELECT rowid, bm25(search_index, ?, ?, ?, ?) AS b, path, symbol_names
-         FROM search_index
-         WHERE search_index MATCH ?
-         ORDER BY b ASC
-         LIMIT 200`,
-      )
-      .all(w_path, w_sym, w_kw, w_content, matchExpr) as unknown as FtsRow[];
-  } catch {
-    // FTS syntax error (e.g. special tokens that slip through) → no results
-    return empty;
+
+  const runMatch = (expr: string): FtsRow[] => {
+    try {
+      return db
+        .prepare(
+          `SELECT rowid, bm25(search_index, ?, ?, ?, ?) AS b, path, symbol_names
+           FROM search_index
+           WHERE search_index MATCH ?
+           ORDER BY b ASC
+           LIMIT 200`,
+        )
+        .all(w_path, w_sym, w_kw, w_content, expr) as unknown as FtsRow[];
+    } catch {
+      return [];
+    }
+  };
+
+  const andExpr = buildMatchExpr(query, "AND");
+  if (!andExpr) return empty;
+  let ftsRows = runMatch(andExpr);
+  if (ftsRows.length === 0) {
+    const orExpr = buildMatchExpr(query, "OR");
+    if (orExpr) ftsRows = runMatch(orExpr);
   }
 
   if (ftsRows.length === 0) return empty;

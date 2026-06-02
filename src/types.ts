@@ -1,4 +1,4 @@
-export type Lang = "ruby" | "python" | "ts" | "js";
+export type Lang = "ruby" | "python" | "ts" | "js" | "prose";
 
 export interface NavigatorConfig {
   enabled: boolean;

@@ -23,6 +23,8 @@ export const DEFAULT_STOPLISTS: Record<Lang, readonly string[]> = {
     "of", "new", "this", "null", "undefined", "true", "false", "import", "export",
     "from", "as", "default", "class", "extends", "async", "await", "typeof", "instanceof",
   ],
+  // Prose (Markdown/text) has no language-specific keywords; cross-lang + user list applies.
+  prose: [],
 };
 
 // Cross-language code-noise + English stopwords applied regardless of lang.
@@ -61,6 +63,30 @@ function isJunk(tok: string, minLen: number): boolean {
   if (HEX_RE.test(tok)) return true;
   if (URL_RE.test(tok)) return true;
   return false;
+}
+
+/**
+ * Tokenize prose (Markdown/text) body. Lowercase, split on any run of chars
+ * NOT in [a-z0-9_], then apply stoplist + minLen. Does NOT call
+ * splitIdentifier — prose is natural language, so camelCase/snake words are
+ * kept whole (lowercased). Markdown structure punctuation is all delimiters.
+ */
+export function tokenizeProse(
+  text: string,
+  stoplist: Set<string>,
+  minLen: number,
+): string[] {
+  const out = new Set<string>();
+  // Strip URL tokens before splitting: the delimiter split discards '://' so URL_RE
+  // won't match scheme fragments ('https') after the fact. Pre-strip instead.
+  const cleaned = text.replace(/[a-z][a-z0-9+\-.]*:\/\/\S*/gi, " ");
+  for (const tok of cleaned.toLowerCase().split(/[^a-z0-9_]+/)) {
+    if (!tok) continue;
+    if (isJunk(tok, minLen)) continue;
+    if (stoplist.has(tok)) continue;
+    out.add(tok);
+  }
+  return Array.from(out);
 }
 
 /**

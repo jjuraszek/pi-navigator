@@ -96,3 +96,75 @@ test("locate on no match returns empty, no throw", async () => {
   assert.deepEqual(res.results, []);
   assert.equal(res.cluster, null);
 });
+
+async function multiWordFixture() {
+  const d = mkdtempSync(join(tmpdir(), "nav-multiword-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  // fileA: has BOTH 'classification' and 'response' (splitIdentifier splits CamelCase)
+  writeFileSync(
+    join(d, "classification_response.rb"),
+    "class ClassificationResponse\n  def call; end\nend\n",
+  );
+  // fileB: has only 'response' (HttpResponse → http + response)
+  writeFileSync(
+    join(d, "response_handler.rb"),
+    "class HttpResponse\n  def handle; end\nend\n",
+  );
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-multiworddb-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  return { db, root: d };
+}
+
+test("AND-first: either-term-only file excluded when AND yields results", async () => {
+  const { db, root } = await multiWordFixture();
+  // AND('classification' AND 'response') yields classification_response.rb files
+  // so response_handler.rb (only 'response') must NOT appear in results — OR never runs
+  const res = locate(db, root, "classification response", DEFAULT_CONFIG);
+  assert.ok(res.results.length > 0, "should return results");
+  const paths = res.results.map((r) => r.path);
+  assert.ok(
+    !paths.includes("response_handler.rb"),
+    "response_handler.rb (either-term only) must be absent when AND yields results",
+  );
+});
+
+test("AND yielding zero rows falls back to OR (non-empty)", async () => {
+  const { db, root } = await multiWordFixture();
+  // 'zebra' appears in no file; 'response' appears in response_handler.rb
+  const res = locate(db, root, "zebra response", DEFAULT_CONFIG);
+  assert.ok(res.results.length > 0, "fallback OR should return results when AND yields zero");
+});
+
+test("single-token query unaffected by AND-first change", async () => {
+  const { db, root } = await multiWordFixture();
+  const res = locate(db, root, "classification", DEFAULT_CONFIG);
+  assert.ok(
+    res.results.some((r) => r.path.includes("classification")),
+    "single-token query must still find classification files",
+  );
+});
+
+test("single all-terms result is kept (no OR dilution)", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-nodilute-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  // exactly one file has both 'classification' + 'response'; five files have only 'response'
+  // Use real word-only class names so splitIdentifier produces 'response' for each
+  writeFileSync(join(d, "class_resp.rb"), "class ClassificationResponse\n  def call; end\nend\n");
+  const responseOnlyClasses = ["HttpResponse", "JsonResponse", "ErrorResponse", "FormResponse", "ApiResponse"];
+  for (const cls of responseOnlyClasses) {
+    writeFileSync(join(d, `${cls.toLowerCase()}.rb`), `class ${cls}\n  def handle; end\nend\n`);
+  }
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-nodildb-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  const res = locate(db, d, "classification response", DEFAULT_CONFIG);
+  assert.ok(res.results.length === 1, `AND-first must return exactly 1 result (the all-terms file), got ${res.results.length}`);
+  assert.ok(res.results[0].path.includes("class_resp"), "must be the all-terms file");
+});

@@ -59,6 +59,21 @@ test("migrate upgrades v2 DB to v3: widens search_index, resets symbols_done, cl
   assert.equal(hsRow, undefined);
 });
 
+test("migrate from v3 forces full re-derive (symbols_done reset)", () => {
+  const db = openDb(":memory:");
+  migrate(db); // current schema
+  db.exec("UPDATE meta SET value='3' WHERE key='schema_version'");
+  db.prepare(
+    "INSERT INTO files(path,content_hash,indexed_at,symbols_done) VALUES('doc/x.md','h',0,1)",
+  ).run();
+  migrate(db); // should detect 3 < SCHEMA_VERSION and reset
+  const row = db.prepare("SELECT symbols_done FROM files WHERE path='doc/x.md'").get() as {
+    symbols_done: number;
+  };
+  assert.equal(row.symbols_done, 0);
+  db.close();
+});
+
 test("migrate creates all tables and is idempotent", () => {
   const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-sch-")), "t.db"));
   migrate(db);

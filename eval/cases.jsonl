@@ -9,3 +9,5 @@
 {"query": "schema migration version", "expect": ["src/store/schema.ts"]}
 {"query": "keyword extraction stoplist", "expect": ["src/indexer/keywords.ts"]}
 {"query": "test file penalty ranking", "expect": ["src/navigator/rank.ts"]}
+{"query": "navigator deep documentation schema ranking", "expect_contains": "NAVIGATOR.md"}
+{"query": "agent instructions", "expect_contains": "AGENTS.md"}

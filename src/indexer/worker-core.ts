@@ -18,7 +18,7 @@ import { hashBuffer, isBinary } from "./hash.ts";
 import { enumerateFiles, langOf } from "./walk.ts";
 import { readLog, foldSignals } from "./git.ts";
 import { extractSymbols, extractImports, extractText } from "./symbols.ts";
-import { extractKeywords, buildStoplist, splitIdentifier } from "./keywords.ts";
+import { extractKeywords, buildStoplist, splitIdentifier, tokenizeProse } from "./keywords.ts";
 import { headSha } from "../worktree.ts";
 
 // ---------------------------------------------------------------------------
@@ -272,7 +272,9 @@ function extractAndStore(
   pathIndex: Set<string>,
   pathToId: Map<string, number>,
 ): void {
-  const isSupported = lang !== null && (config.languages as string[]).includes(lang);
+  // Prose is never a supported grammar lang (no tree-sitter grammar exists for it).
+  // Exclude it explicitly so a misconfigured config.languages can never reach tree-sitter.
+  const isSupported = lang !== null && lang !== "prose" && (config.languages as string[]).includes(lang);
   let symNameList: string[] = [];
   let symbolNames = "";
   let textTokens: string[] = [];
@@ -305,10 +307,20 @@ function extractAndStore(
     replaceRefs(db, fileId, edges);
   }
 
-  // Only source files (lang !== null) enter the FTS index.  Generated
+  // Only source/prose files (lang !== null) enter the FTS index.  Generated
   // artefacts like package-lock.json have no symbols and their path tokens
   // would pollute BM25 scores for source-navigation queries.
-  if (lang !== null) {
+  //
+  // Prose branch is selected by lang === "prose" independent of
+  // config.languages so a misconfigured config.languages can never route prose
+  // to tree-sitter.
+  if (lang === "prose") {
+    const stoplist = buildStoplist(lang, config.keywordStoplist);
+    const tokens = tokenizeProse(text, stoplist, config.keywordMinLength);
+    const joined = tokens.join(" ");
+    // symbol_names empty; keywords == content (already final filtered tokens).
+    ftsUpsert(db, fileId, relPath, "", joined, joined);
+  } else if (lang !== null) {
     const stoplist = buildStoplist(lang, config.keywordStoplist);
     const keywords = extractKeywords([...symNameList, ...textTokens], stoplist, config.keywordMinLength).join(" ");
     const contentTokens = new Set<string>();

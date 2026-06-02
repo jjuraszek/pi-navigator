@@ -5,7 +5,7 @@ import type { NavigatorConfig } from "./types.ts";
 
 export const DEFAULT_CONFIG: NavigatorConfig = {
   enabled: true,
-  injectPersona: false,
+  injectPersona: true,
   indexDir: join(homedir(), ".pi", "pi-navigator-cache"),
   languages: ["ruby", "python", "ts", "js"],
   maxLocateResults: 10,

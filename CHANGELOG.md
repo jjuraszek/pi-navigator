@@ -17,8 +17,23 @@ All notable changes are documented here. Newest first.
   df-cap.
 - **Config:** `navigator.keywordStoplist` (extra stoplist terms, appended to
   defaults) and `navigator.keywordMinLength` (default 3).
+- **Prose/doc indexing.** A `prose` language class (`.md`, `.markdown`, `.txt`,
+  `.rst`, `.adoc`) indexes document bodies into FTS via `tokenizeProse`
+  (lowercase, split on non-`[a-z0-9_]`, URL-stripped, stoplist + `keywordMinLength`
+  filtered, no identifier-splitting). Prose rows carry empty `symbol_names` and
+  never reach tree-sitter — selected by `lang === "prose"` independent of
+  `config.languages`. Docs are now locatable by filename and by body term.
 
 ### Changed
+- **Pickup:** `navigator.injectPersona` now defaults on; the tool description,
+  persona, and skill all lead with navigator-first guidance for "where is X" /
+  "what's related" queries, with an explicit `rg` boundary (regex/full-content
+  scans stay with `rg`).
+- **Multi-word queries:** `locate` runs an AND-first FTS match and falls back to
+  OR only when AND returns zero rows, so all-terms files outrank either-term
+  files without losing recall.
+- **Schema v4** — version bump forces a one-time re-derive so existing indexes
+  pick up prose files (no DDL change).
 - **Ranking:** column-weighted BM25 (`COLUMN_WEIGHTS`) plus a multiplicative
   test-file penalty (`TEST_GLOBS`) applied last, so implementation files
   outrank their tests for the same query.

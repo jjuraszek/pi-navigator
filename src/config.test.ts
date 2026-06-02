@@ -5,10 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG, loadConfig, mergeConfig } from "./config.ts";
 
-test("defaults: persona off, sqlite cache dir", () => {
-  assert.equal(DEFAULT_CONFIG.injectPersona, false);
+test("defaults: persona on, sqlite cache dir", () => {
+  assert.equal(DEFAULT_CONFIG.injectPersona, true);
   assert.ok(DEFAULT_CONFIG.indexDir.endsWith("pi-navigator-cache"));
   assert.deepEqual(DEFAULT_CONFIG.languages, ["ruby", "python", "ts", "js"]);
+});
+
+test("injectPersona defaults to true", () => {
+  assert.equal(DEFAULT_CONFIG.injectPersona, true);
+});
+
+test("injectPersona can be disabled via settings", () => {
+  const cfg = mergeConfig({ injectPersona: false });
+  assert.equal(cfg.injectPersona, false);
 });
 
 test("loadConfig reads navigator block from settings.json", () => {

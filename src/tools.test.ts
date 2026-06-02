@@ -17,6 +17,26 @@ function fakePi() {
   return { tools, registerTool: (d: any) => tools.push(d) };
 }
 
+test("navigator_locate guidelines contain navigator-first lead and rg boundary clause", () => {
+  const pi = fakePi();
+  registerTools(pi, () => null);
+  const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
+  const text = (locateTool.promptGuidelines as string[]).join(" ").toLowerCase();
+  assert.ok(text.includes("before"), "must assert navigator before other tools");
+  assert.ok(
+    text.includes("rg") || text.includes("ripgrep"),
+    "must name rg or ripgrep in boundary clause",
+  );
+  assert.ok(
+    text.includes("regex") || text.includes("full-content") || text.includes("scan"),
+    "must state when rg is appropriate",
+  );
+  assert.ok(
+    text.includes("doc") || text.includes("docs") || text.includes("code"),
+    "must mention coverage (code or docs)",
+  );
+});
+
 test("registers navigator_locate and navigator_slice with tool-named guidelines", () => {
   const pi = fakePi();
   registerTools(pi, () => null);

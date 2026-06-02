@@ -62,6 +62,14 @@ test("enumerateFiles non-git fallback returns files", () => {
   assert.equal(rb?.lang, "ruby");
 });
 
+test("langOf maps prose extensions to 'prose'", () => {
+  for (const p of ["a.md", "b.markdown", "c.txt", "d.rst", "e.adoc"]) {
+    assert.equal(langOf(p), "prose");
+  }
+  assert.equal(langOf("f.rb"), "ruby");
+  assert.equal(langOf("g.bin"), null);
+});
+
 test("non-git fallback applies secret + denylist filters", () => {
   const d = mkdtempSync(join(tmpdir(), "nav-walk-nogit2-"));
   writeFileSync(join(d, "model.rb"), "class M; end");

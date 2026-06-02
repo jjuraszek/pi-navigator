@@ -31,11 +31,11 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
     name: "navigator_locate",
     label: "Navigator Locate",
     description:
-      "Search the repository index for files and symbols by name or description. Returns ranked results with co-change neighbours and referrers so you can understand the cluster in one call.",
+      "First step for locating anything in this repo — code OR docs. Returns ranked entry points with co-change neighbours and referrers in one call. Call before rg/find/read for 'where is X', 'where do I start', 'what's related to Y'.",
     promptSnippet: "Find entry points, related files, and who references them",
     promptGuidelines: [
-      "Use navigator_locate BEFORE ripgrep or read to orient in this repository: it returns ranked files, what changes with them (co-change), and who imports/requires them (referrers) in a single call.",
-      "navigator_locate is the fastest way to answer 'where does X live' or 'what is related to Y' — prefer it over repeated grep/find calls.",
+      "Call navigator_locate BEFORE rg/find/read to locate code OR docs: it returns ranked files, co-change, and referrers in a single call.",
+      "Use rg only for regex matching or scanning full file contents across many files; use navigator_locate to find where something lives or what relates to it.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Name, symbol, or description to search for" }),

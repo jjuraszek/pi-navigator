@@ -91,7 +91,7 @@ PRIMARY KEY (src_file, dst_file, kind)
 
 Standard stored FTS5 table (NOT `content=''`). Stores an inverted index over four columns for content-aware BM25 search. **No original file bytes are retained** - only tokenized fragments derived from symbol names, comment/string-literal text, and path segments (a recoverable bag-of-words, never the original byte layout). Secret and gitignored files are never indexed.
 
-**Schema version: 3** (porter stemmer, 4 columns - upgraded from the earlier 3-column `unicode61` table).
+**Schema version: 4** (porter stemmer, 4 columns, prose indexing - upgraded from the earlier 3-column `unicode61` table).
 
 ```sql
 CREATE VIRTUAL TABLE search_index USING fts5(
@@ -105,7 +105,7 @@ CREATE VIRTUAL TABLE search_index USING fts5(
 
 Rowid == `files.id`. Only files with `lang != null` enter `search_index` (generated artefacts stay out to prevent BM25 score pollution). `bm25(search_index, w1, w2, w3, w4)` is called with per-column weights (see §Ranking). A `summary` column is intentionally absent; adding it is additive if LLM summaries land.
 
-**Migration (v2 → v3):** `migrate()` detects `schema_version < SCHEMA_VERSION`, drops `search_index`, resets `symbols_done = 0` on all files, and clears the co-change/crawl cursors so the worker re-derives every row into the new columns. A fresh DB (version 0) skips the reset branch.
+**Migration (v3 → v4):** `migrate()` detects `schema_version < SCHEMA_VERSION`, drops `search_index`, resets `symbols_done = 0` on all files, and clears the co-change/crawl cursors so the worker re-derives every row into the new columns — picking up prose files that were previously skipped. A fresh DB (version 0) skips the reset branch. No DDL change in this bump; only the version constant changed.
 
 ---
 
@@ -121,6 +121,10 @@ score = w_fts    * norm(bm25(search_index, w_col_path, w_col_sym, w_col_kw, w_co
 ```
 
 Then multiplied by the test-file penalty (see below), applied last.
+
+### FTS query strategy: AND-first with OR fallback
+
+`locate()` runs an AND-form MATCH first (`classification AND response`). If AND returns zero rows it re-runs with OR (`classification OR response`). Fallback fires **only on emptiness** — a single file containing all terms is the correct answer and is not diluted by an OR retry. Single-token queries have identical AND/OR forms, so one query is issued.
 
 ### Signal fusion weights (`DEFAULT_WEIGHTS` in `src/navigator/rank.ts`)
 
@@ -175,9 +179,14 @@ Keywords are harvested **at index time** from data already in memory - no extra 
 
 ### Token sources
 
+**Source files (ruby/python/ts/js):**
 - **Symbol names** from tree-sitter (`extractSymbols`): class/module/function/method/const names.
 - **Comment + string-literal text** from tree-sitter (`extractText`): comment nodes and string-literal nodes (`string`, plus `template_string` for ts/js). Comment markers and quote characters act as natural delimiters when the text is split.
 - Every source string is split into fragments (`splitIdentifier`) and filtered (see below). Only derived, split, filtered tokens are stored — never the raw literal or comment text.
+
+**Prose files (.md / .markdown / .txt / .rst / .adoc):**
+- Indexed by `tokenizeProse` — no tree-sitter, no `splitIdentifier`.
+- See §Prose Indexing below.
 
 The `keywords` column receives the **filtered** high-signal fragment set (symbol + comment + string tokens); the `content` column receives the **unfiltered** split-identifier stream (every fragment, deduped) for catch-all recall.
 
@@ -215,6 +224,49 @@ Domain terms (`plant`, `voltage`, `grid`, `invoice`) are **never hardcoded into 
 |---|---|---|
 | `keywordStoplist` | `[]` | Extra stoplist terms appended to defaults |
 | `keywordMinLength` | `3` | Drop keyword tokens shorter than this |
+
+---
+
+## Prose Indexing (`src/indexer/keywords.ts`, `src/indexer/worker-core.ts`)
+
+Markdown, plain-text, and lightweight markup files are indexed as first-class citizens alongside source code. This directly addresses the "doc-only terms" gap: a file located only by its prose content (not a path segment or symbol name) is now findable.
+
+### Prose language class
+
+`langOf()` in `src/indexer/walk.ts` maps the following extensions to `lang = "prose"`:
+
+| Extension | Included |
+|---|---|
+| `.md`, `.markdown` | Markdown |
+| `.txt` | Plain text |
+| `.rst` | reStructuredText |
+| `.adoc` | AsciiDoc |
+
+### `tokenizeProse` algorithm
+
+1. **Lowercase** the entire body.
+2. **Split** on any maximal run of characters **not** in `[a-z0-9_]` → raw word tokens. Whitespace, all Markdown/structure punctuation (`#`, `*`, `_`, `` ` ``, `[`, `]`, `(`, `)`, `|`, `>`, `-`) are all delimiters. Heading markers, emphasis, list bullets, link brackets, code-fence ticks, and table pipes never become tokens.
+3. **Filter**: apply `keywordStoplist` + `keywordMinLength` (same filter as source keywords).
+
+`tokenizeProse` does **not** call `splitIdentifier` — prose is natural language, so camelCase and snake_case words are kept whole (lowercased). A term like `StateMachine` in a doc becomes the single token `statemachine`.
+
+### FTS columns for prose rows
+
+| Column | Value |
+|---|---|
+| `path` | Path segments (same as source files) |
+| `symbol_names` | **empty** (no tree-sitter, no symbols) |
+| `keywords` | `tokenizeProse` output joined by spaces |
+| `content` | Same as `keywords` for prose (no separate split-identifier stream) |
+
+FTS5 BM25 scores an empty `symbol_names` column as zero contribution, not an error. A prose row matching only on `path` ranks normally.
+
+### Invariants preserved
+
+- Gitignored files are still fully excluded (the `git ls-files`-based walker excludes them before `langOf` is called).
+- Secret globs (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`) are still dropped by `isSecret()` before any read.
+- The 1 MB / binary file gates in `worker-core.ts` apply to prose files identically to source files.
+- `config.languages` stays `["ruby","python","ts","js"]`; adding `"prose"` to it has no effect (the prose branch is selected by `lang === "prose"` independent of `config.languages`, so tree-sitter can never be reached for prose).
 
 ---
 
@@ -354,7 +406,7 @@ When summary embeddings land (out of scope for v0.1.0), back this with `sqlite-v
 
 ## Limitations (PoC)
 
-**Token sources: symbol names + comment/string-literal text + path segments.** The `keywords` and `content` FTS columns are derived from split-identifier fragments of tree-sitter symbol names plus the text of comment and string-literal nodes (`extractText`). A query whose terms appear in none of those (e.g. prose that lives only outside the indexed source files) remains out of scope. Semantic/embedding search is still deferred to the `vectors.ts` seam.
+**Token sources: symbol names + comment/string-literal text + path segments + prose bodies.** The `keywords` and `content` FTS columns are derived from split-identifier fragments of tree-sitter symbol names plus the text of comment and string-literal nodes (`extractText`) for source files, and from `tokenizeProse` for `.md/.txt/.rst/.adoc` files. A query whose terms appear in none of those sources remains out of scope for this deterministic index. Semantic/embedding search is still deferred to the `vectors.ts` seam.
 
 **Co-change is a full re-scan on HEAD change.** When `head_sha_at_index` != current HEAD, the entire `git log` is re-scanned up to `cochangeMaxCommits`. There is no incremental co-change update (only the cursor for the initial full-build is incremental). On large repos with many commits this takes a few seconds in the background.
 

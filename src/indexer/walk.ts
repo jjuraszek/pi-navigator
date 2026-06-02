@@ -58,6 +58,12 @@ export function langOf(path: string): Lang | null {
     case ".mjs":
     case ".cjs":
       return "js";
+    case ".md":
+    case ".markdown":
+    case ".txt":
+    case ".rst":
+    case ".adoc":
+      return "prose";
     default:
       return null;
   }

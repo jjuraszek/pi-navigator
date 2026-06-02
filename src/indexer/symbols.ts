@@ -14,6 +14,9 @@ const GRAMMAR_FILENAMES: Record<Lang, string> = {
   python: "tree-sitter-python.wasm",
   ts: "tree-sitter-typescript.wasm",
   js: "tree-sitter-javascript.wasm",
+  // prose has no tree-sitter grammar; this entry satisfies the Record type.
+  // prose files are excluded from initParsers/extractSymbols by the isSupported gate.
+  prose: "",
 };
 
 function grammarPath(lang: Lang): string {
@@ -231,6 +234,8 @@ const STRING_NODE_TYPES: Record<Lang, ReadonlySet<string>> = {
   python: new Set(["string"]),
   ts: new Set(["string", "template_string"]),
   js: new Set(["string", "template_string"]),
+  // prose has no tree-sitter grammar; never reached due to isSupported gate.
+  prose: new Set(),
 };
 
 function collectText(node: Node, lang: Lang, out: string[]): void {
