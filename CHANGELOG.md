@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.3.1] - 2026-06-03
+
 ### Fixed
 - **Status footer stuck on "indexing…".** The footer label was only recomputed
   in `turn_end`, so when background indexing finished while the user was idle the
