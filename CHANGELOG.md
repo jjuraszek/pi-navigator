@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.2.1] - 2026-06-02
+
 ### Added
 - **Exact symbol-definition recall.** `navigator_locate` now does a direct
   `symbols`-table lookup (`findSymbolDefs`, backed by `idx_symbols_name`) for
