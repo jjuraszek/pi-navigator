@@ -40,6 +40,7 @@ export class RollingIndexer {
   private _coverage: Coverage | null = null;
   private _stopped = false;
   private _workerError: string | null = null;
+  private _onCoverage: ((cov: Coverage) => void) | null = null;
 
   constructor(config: NavigatorConfig, spawn?: SpawnFn) {
     this._config = config;
@@ -52,6 +53,15 @@ export class RollingIndexer {
 
   get coverage(): Coverage | null {
     return this._coverage;
+  }
+
+  /**
+   * Subscribe to coverage updates pushed by the worker. Fires on every reported
+   * coverage message, so the UI can switch out of "indexing…" the moment the
+   * background crawl finishes — without waiting for the next turn_end.
+   */
+  onCoverage(cb: (cov: Coverage) => void): void {
+    this._onCoverage = cb;
   }
 
   get workerFailed(): boolean {
@@ -78,6 +88,7 @@ export class RollingIndexer {
           (msg as Record<string, unknown>)["type"] === "coverage"
         ) {
           this._coverage = (msg as Record<string, unknown>)["coverage"] as Coverage;
+          this._onCoverage?.(this._coverage);
         }
       });
       worker.on("error", (err: Error) => {

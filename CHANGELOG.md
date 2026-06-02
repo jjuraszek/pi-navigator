@@ -4,6 +4,14 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Fixed
+- **Status footer stuck on "indexing…".** The footer label was only recomputed
+  in `turn_end`, so when background indexing finished while the user was idle the
+  widget never left the static `"navigator: indexing…"` set at `session_start`.
+  `RollingIndexer` now exposes `onCoverage(cb)` and fires it on every worker
+  coverage message; `index.ts` subscribes to push status reactively, switching to
+  `"N% indexed"` the moment the crawl completes.
+
 ## [v0.3.0] - 2026-06-02
 
 ### Added

@@ -8,7 +8,7 @@ import { resolveRepo, headSha } from "./src/worktree.ts";
 import { openDb } from "./src/store/db.ts";
 import { migrate } from "./src/store/schema.ts";
 import { getMeta, getCoverage } from "./src/store/queries.ts";
-import type { RepoStatus } from "./src/types.ts";
+import type { RepoStatus, Coverage } from "./src/types.ts";
 import { initParsers } from "./src/indexer/symbols.ts";
 import { RollingIndexer } from "./src/indexer/rolling.ts";
 import { VerifiedCache } from "./src/navigator/verified-cache.ts";
@@ -20,6 +20,14 @@ import { registerNavigatorCommand } from "./src/commands.ts";
  * Converts an absolute or cwd-relative path to a repo-relative POSIX path.
  * Returns undefined if the resolved path escapes the repo root.
  */
+/** Footer label for the current indexing coverage. */
+function statusLabel(cov: Coverage): string {
+  const pct = cov.total === 0 ? 0 : Math.round((cov.indexed / cov.total) * 100);
+  return cov.fullCrawlDone
+    ? `navigator: ${pct}% indexed`
+    : `navigator: indexing ${pct}%…`;
+}
+
 function toRepoRel(root: string, p: string, cwd: string): string | undefined {
   const abs = resolve(cwd, p);
   const rel = relative(root, abs);
@@ -37,6 +45,9 @@ export default function (pi: ExtensionAPI): void {
   let dbPathForStatus = "";
   let config = loadConfig(); // outer config so before_agent_start can read it
   let sessionCwd = process.cwd(); // updated in session_start
+  // Captured in session_start so background coverage updates can refresh the
+  // footer between turns (the worker finishes indexing while the user is idle).
+  let ui: { setStatus(key: string, text: string | undefined): void } | null = null;
 
   // Map toolCallId → path for in-flight edit/write calls
   const pendingArgs = new Map<string, string>();
@@ -104,6 +115,12 @@ export default function (pi: ExtensionAPI): void {
 
     // Boot the rolling indexer — acquires writer lock, spawns the worker if elected.
     rolling = new RollingIndexer(config);
+    // Push status reactively whenever the worker reports coverage, so the footer
+    // leaves "indexing…" as soon as the crawl finishes — not at the next turn_end.
+    ui = ctx.ui;
+    rolling.onCoverage((cov) => {
+      if (rolling?.isWriter) ui?.setStatus("navigator", statusLabel(cov));
+    });
     rolling.start(repo);
 
     ctx.ui.setStatus(
@@ -155,12 +172,8 @@ export default function (pi: ExtensionAPI): void {
     rolling?.refreshLock();
     // Update the status widget with latest coverage if available.
     const cov = rolling?.coverage;
-    if (cov && ctx?.ui) {
-      const pct = cov.total === 0 ? 0 : Math.round((cov.indexed / cov.total) * 100);
-      const label = cov.fullCrawlDone
-        ? `navigator: ${pct}% indexed`
-        : `navigator: indexing ${pct}%…`;
-      ctx.ui.setStatus("navigator", label);
+    if (cov && rolling?.isWriter && ctx?.ui) {
+      ctx.ui.setStatus("navigator", statusLabel(cov));
     }
   });
 
@@ -196,6 +209,7 @@ export default function (pi: ExtensionAPI): void {
     state = null;
     repoStatus = "booting";
     dbPathForStatus = "";
+    ui = null;
     pendingArgs.clear();
   });
 }

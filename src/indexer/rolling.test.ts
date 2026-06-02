@@ -66,6 +66,30 @@ test("coverage message from worker is captured", () => {
   a.stop();
 });
 
+test("onCoverage callback fires on every worker coverage message", () => {
+  const repo = fakeRepo();
+  let messageCb: ((msg: unknown) => void) | undefined;
+  const worker: WorkerLike = {
+    postMessage: () => {},
+    terminate: () => {},
+    on: (event, cb) => { if (event === "message") messageCb = cb as (msg: unknown) => void; },
+  };
+  const a = new RollingIndexer(DEFAULT_CONFIG, () => worker);
+  const seen: Array<{ indexed: number; fullCrawlDone: boolean }> = [];
+  a.onCoverage((cov) => { seen.push({ indexed: cov.indexed, fullCrawlDone: cov.fullCrawlDone }); });
+  a.start(repo);
+
+  assert.ok(messageCb !== undefined);
+  messageCb({ type: "coverage", coverage: { total: 2, indexed: 1, fullCrawlDone: false, headBehind: 0 } });
+  messageCb({ type: "coverage", coverage: { total: 2, indexed: 2, fullCrawlDone: true, headBehind: 0 } });
+
+  assert.deepEqual(seen, [
+    { indexed: 1, fullCrawlDone: false },
+    { indexed: 2, fullCrawlDone: true },
+  ]);
+  a.stop();
+});
+
 test("worker crash: workerFailed=true and lock released for next acquirer", () => {
   const repo = fakeRepo();
   // Capture the "exit" callback so we can fire it manually
