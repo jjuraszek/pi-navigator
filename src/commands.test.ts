@@ -17,6 +17,7 @@ test("command handler notifies status and triggers reindex", async () => {
     active: true,
     coverage: { total: 10, indexed: 4, fullCrawlDone: false, headBehind: 0 },
     isWriter: true,
+    dbPath: "/tmp/cache/repo_abc123.db",
     reindex: (p) => { reindexed = p; },
   };
   let captured: any;
@@ -25,6 +26,7 @@ test("command handler notifies status and triggers reindex", async () => {
   const ctx = { ui: { notify: (m: string) => notes.push(m) } };
   await captured.handler("status", ctx);
   assert.ok(notes.some((n) => /4\/10|40%/.test(n)), "status should report coverage");
+  assert.ok(notes.some((n) => /\/tmp\/cache\/repo_abc123\.db/.test(n)), "status should include db path");
   await captured.handler("reindex app/x.rb", ctx);
   assert.equal(reindexed, "app/x.rb");
 });
@@ -36,6 +38,7 @@ test("command handler reports inactive when not a git repo", async () => {
     active: false,
     coverage: null,
     isWriter: false,
+    dbPath: "",
     reindex: () => { reindexed = true; },
   };
   let captured: any;

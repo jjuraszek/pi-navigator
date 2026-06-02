@@ -10,6 +10,8 @@ import { initParsers } from "../indexer/symbols.ts";
 import { runIndexPass } from "../indexer/worker-core.ts";
 import { locate } from "./locate.ts";
 import { DEFAULT_CONFIG } from "../config.ts";
+import { setMeta } from "../store/queries.ts";
+import { headSha } from "../worktree.ts";
 
 async function indexedFixture() {
   const d = mkdtempSync(join(tmpdir(), "nav-loc-"));
@@ -258,4 +260,25 @@ test("single all-terms result is kept (no OR dilution)", async () => {
   const res = locate(db, d, "classification response", DEFAULT_CONFIG);
   assert.ok(res.results.length === 1, `AND-first must return exactly 1 result (the all-terms file), got ${res.results.length}`);
   assert.ok(res.results[0].path.includes("class_resp"), "must be the all-terms file");
+});
+
+test("locate marks fresh on a clean indexed tree and dirty after an edit", async () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-dirty-"));
+  const g = (args: string[]) => execFileSync("git", args, { cwd: d });
+  g(["init", "-q"]); g(["config", "user.email", "t@t.t"]); g(["config", "user.name", "t"]);
+  writeFileSync(join(d, "grid.rb"), "class Grid\n  def sync; end\nend\n");
+  g(["add", "."]); g(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-dirtydb-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  setMeta(db, "head_sha_at_index", headSha(d)!);
+  const clean = locate(db, d, "Grid", DEFAULT_CONFIG);
+  assert.equal(clean.index.dirty, false, "clean tree should not be dirty");
+  assert.equal(clean.index.fresh, true, "clean indexed tree should be fresh");
+  writeFileSync(join(d, "grid.rb"), "class Grid\n  def sync; puts 1; end\nend\n");
+  const dirty = locate(db, d, "Grid", DEFAULT_CONFIG);
+  assert.equal(dirty.index.dirty, true, "modified tree should be dirty");
+  assert.equal(dirty.index.fresh, false, "dirty tree is not fresh");
+  assert.equal(dirty.index.head_behind, 0, "HEAD still matches; only working tree moved");
 });

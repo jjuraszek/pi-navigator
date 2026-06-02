@@ -1,6 +1,6 @@
 import type { Db } from "../store/db.ts";
 import { getMeta, getCoverage, refFanIn, findSymbolDefs } from "../store/queries.ts";
-import { headSha } from "../worktree.ts";
+import { headSha, workingTreeDirty } from "../worktree.ts";
 import { countCommitsBetween } from "../indexer/git.ts";
 import { score, pathMatch, recencyBoost, COLUMN_WEIGHTS, applyTestPenalty } from "./rank.ts";
 import type {
@@ -70,11 +70,13 @@ export function locate(
   // --- index status (computed regardless of query result) ---
   const indexHeadSha = getMeta(db, "head_sha_at_index");
   const currentHead = headSha(root);
-  const fresh = Boolean(indexHeadSha && currentHead && indexHeadSha === currentHead);
+  const headMatch = Boolean(indexHeadSha && currentHead && indexHeadSha === currentHead);
+  const dirty = workingTreeDirty(root);
+  const fresh = headMatch && !dirty;
   const cov = getCoverage(db);
   const coverage = cov.total > 0 ? cov.indexed / cov.total : 0;
-  const head_behind = fresh ? 0 : countCommitsBetween(root, indexHeadSha ?? "");
-  const indexStatus = { fresh, head_behind, coverage };
+  const head_behind = headMatch ? 0 : countCommitsBetween(root, indexHeadSha ?? "");
+  const indexStatus = { fresh, head_behind, coverage, dirty };
 
   const empty: LocateResponse = {
     results: [],

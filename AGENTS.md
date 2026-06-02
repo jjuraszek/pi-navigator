@@ -241,3 +241,4 @@ CI runs `npm run typecheck` then `node --test` on every push (`.github/workflows
 | **Only the lock holder writes the index** | Prevents duplicate indexing across worktrees, subagents, and concurrent sessions. Non-holders run read-only. |
 | **Slices always read the active worktree** | Ground-truth correctness. The index is a navigation approximation; it must never be the source of bytes for an edit. |
 | **Secret globs are always ignored** | `.env*`, `*.pem`, `*.key`, `id_*`, `*.p12` are excluded from walk and never sliced. |
+| **One index = one git repo identity (root-commit sha)** | All worktrees of a repo share it; outside a git work tree navigator is dormant (no DB/worker) and the tools return a terminal "use rg/fd" message. `resolveRepo` returns `dbPath: ""` for non-git cwd, so no phantom index file is ever named. |

@@ -49,12 +49,21 @@ export interface LocateResult {
 export interface LocateCluster { anchor: string; cochange: string[]; referrers: string[]; }
 export interface LocateResponse {
   results: LocateResult[]; cluster: LocateCluster | null;
-  index: { fresh: boolean; head_behind: number; coverage: number };
+  index: { fresh: boolean; head_behind: number; coverage: number; dirty: boolean };
   // "low" signals weak recall: query terms don't co-occur in any one file, or the
   // top hit has no structural (symbol/path) anchor. Callers should fall back to
   // rg/find/read rather than trust the ranking.
   confidence: "high" | "low";
 }
+
+/**
+ * Tool-facing repo gating state.
+ * - "booting": git repo, index not yet ready (retryable — try again shortly).
+ * - "non_git": cwd is not inside a git work tree (terminal — navigator dormant, use rg/fd).
+ * - "disabled": navigator turned off via config (terminal — use rg/fd).
+ * - "ready": serving.
+ */
+export type RepoStatus = "booting" | "non_git" | "disabled" | "ready";
 
 export interface SliceResult {
   path: string; range: [number, number]; content: string;

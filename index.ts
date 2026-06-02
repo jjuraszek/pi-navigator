@@ -7,7 +7,8 @@ import { loadConfig } from "./src/config.ts";
 import { resolveRepo, headSha } from "./src/worktree.ts";
 import { openDb } from "./src/store/db.ts";
 import { migrate } from "./src/store/schema.ts";
-import { getMeta } from "./src/store/queries.ts";
+import { getMeta, getCoverage } from "./src/store/queries.ts";
+import type { RepoStatus } from "./src/types.ts";
 import { initParsers } from "./src/indexer/symbols.ts";
 import { RollingIndexer } from "./src/indexer/rolling.ts";
 import { VerifiedCache } from "./src/navigator/verified-cache.ts";
@@ -32,6 +33,8 @@ export default function (pi: ExtensionAPI): void {
   // Per-session state; initialised in session_start, torn down in session_shutdown.
   let state: NavigatorCtx | null = null;
   let rolling: RollingIndexer | null = null;
+  let repoStatus: RepoStatus = "booting";
+  let dbPathForStatus = "";
   let config = loadConfig(); // outer config so before_agent_start can read it
   let sessionCwd = process.cwd(); // updated in session_start
 
@@ -39,11 +42,12 @@ export default function (pi: ExtensionAPI): void {
   const pendingArgs = new Map<string, string>();
 
   // Register tools and command at load-time with late-bound state getters.
-  registerTools(pi, () => state);
+  registerTools(pi, () => state, () => repoStatus);
   registerNavigatorCommand(pi, () => ({
     active: rolling !== null,
     coverage: rolling?.coverage ?? null,
     isWriter: rolling?.isWriter ?? false,
+    dbPath: dbPathForStatus,
     reindex: (p?: string) => rolling?.reindex(p),
   }));
 
@@ -52,7 +56,10 @@ export default function (pi: ExtensionAPI): void {
   // -------------------------------------------------------------------------
   pi.on("session_start", async (_event, ctx) => {
     config = loadConfig();
-    if (!config.enabled) return;
+    if (!config.enabled) {
+      repoStatus = "disabled";
+      return;
+    }
 
     sessionCwd = ctx.cwd;
     const repo = resolveRepo(ctx.cwd, config);
@@ -62,6 +69,7 @@ export default function (pi: ExtensionAPI): void {
     // and walking an arbitrary cwd would index files with no .gitignore
     // protection. Stay fully dormant: no DB, no worker, tools report inactive.
     if (!repo.isGit) {
+      repoStatus = "non_git";
       ctx.ui.setStatus("navigator", "navigator: inactive (not a git repo)");
       return;
     }
@@ -70,13 +78,29 @@ export default function (pi: ExtensionAPI): void {
     // Bootstrap exception: migrate is idempotent + WAL-serialised; safe for non-writers
     // to ensure schema exists before the lock election and worker spawn.
     const db = openDb(repo.dbPath);
-    migrate(db);
-
-    // Parsers are needed on the main thread for slice re-extraction (live symbol lookup).
-    await initParsers(config.languages);
+    try {
+      migrate(db);
+      // Parsers are needed on the main thread for slice re-extraction (live symbol lookup).
+      await initParsers(config.languages);
+    } catch {
+      // Init failed: don't leak the DB handle, and leave status retryable.
+      try {
+        db.close();
+      } catch {
+        // ignore
+      }
+      ctx.ui.setStatus("navigator", "navigator: failed to initialise");
+      return;
+    }
 
     const cache = new VerifiedCache();
     state = { db, root: repo.root, cache, config };
+    dbPathForStatus = repo.dbPath;
+    repoStatus = "ready";
+
+    // Footnote only after the index is actually ready — never announce "loaded" on a failed init.
+    const cov0 = getCoverage(db);
+    ctx.ui.notify(`navigator loaded — ${repo.dbPath} (${cov0.indexed}/${cov0.total} indexed)`, "info");
 
     // Boot the rolling indexer — acquires writer lock, spawns the worker if elected.
     rolling = new RollingIndexer(config);
@@ -170,6 +194,8 @@ export default function (pi: ExtensionAPI): void {
       // Ignore errors closing the DB on shutdown.
     }
     state = null;
+    repoStatus = "booting";
+    dbPathForStatus = "";
     pendingArgs.clear();
   });
 }

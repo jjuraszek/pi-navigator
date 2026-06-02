@@ -4,6 +4,42 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Added
+- **Repo-isolation gating with a `disabled` state.** `RepoStatus` is now
+  `"booting" | "non_git" | "disabled" | "ready"`. `navigator_locate` /
+  `navigator_slice` return a **terminal** "use rg/fd/read" message outside a git
+  work tree (`non_git`) or when the extension is config-disabled (`disabled`),
+  and a **retryable** "try again shortly" message only while `booting`. Closes
+  the gap where a genuine navigator miss could read as "this does not exist."
+- **Working-tree-aware freshness.** `navigator_locate`'s `index` status gained a
+  `dirty` field; `fresh = headMatch && !dirty` (HEAD match AND a clean working
+  tree). `head_behind` now reports true commit distance (keyed off HEAD match,
+  so a dirty-but-on-HEAD tree reports `0`). Slices still always read live
+  worktree bytes — dirtiness only annotates locate ranking, never reads.
+- **Index footnote.** `session_start` emits `navigator loaded — <dbPath>
+  (N/M indexed)` once the index is ready; `/navigator status` gained a
+  `db: <dbPath>` line.
+- **Zero-result fallback nudge.** An empty `navigator_locate` result now says
+  "navigator may not cover this query — fall back to rg/fd/read before concluding
+  it doesn't exist" instead of a bare "No results found."
+- **Runtime-seam integration test** (`index.test.ts`) driving the real extension
+  export through `session_start → shutdown` for disabled / non-git / git-ready
+  cycles.
+
+### Changed
+- **One index = one git repository identity (root-commit sha).** `resolveRepo`
+  returns `dbPath: ""` outside a git work tree so no phantom index file is ever
+  named; all worktrees of a repo continue to share the one index. Documented as
+  a hard invariant in `NAVIGATOR.md` and `AGENTS.md`.
+- **Honest freshness messaging.** The locate footer no longer prints the
+  self-contradictory "100% — still building"; coverage and behind-HEAD are now
+  reported as independent lines.
+
+### Fixed
+- **DB-handle leak on failed init.** `migrate` + `initParsers` are wrapped so a
+  failure closes the DB and leaves status retryable; the "navigator loaded"
+  notify now fires only after the index is actually `ready`.
+
 ## [v0.2.2] - 2026-06-02
 
 ### Changed

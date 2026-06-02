@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { resolveRepo } from "./worktree.ts";
+import { resolveRepo, workingTreeDirty } from "./worktree.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 
 function tmpRepo(): string {
@@ -15,12 +15,24 @@ function tmpRepo(): string {
   return d;
 }
 
-test("resolveRepo on a non-git directory uses hash fallback", () => {
+test("resolveRepo on a non-git directory yields empty dbPath (no phantom index)", () => {
   const d = mkdtempSync(join(tmpdir(), "nav-nogit-"));
   const r = resolveRepo(d, DEFAULT_CONFIG);
   assert.equal(r.isGit, false);
-  assert.match(r.repoId, /^[0-9a-f]{12}$/);
-  assert.equal(r.dbPath, join(DEFAULT_CONFIG.indexDir, `${r.repoName}_${r.repoId}.db`));
+  assert.equal(r.dbPath, "", "non-git resolution must not name a real DB file");
+});
+
+test("workingTreeDirty is false on a clean committed tree", () => {
+  const d = tmpRepo();
+  assert.equal(workingTreeDirty(d), false);
+});
+
+test("workingTreeDirty is true with an uncommitted edit, false outside git", () => {
+  const d = tmpRepo();
+  writeFileSync(join(d, "f.txt"), "changed");
+  assert.equal(workingTreeDirty(d), true);
+  const nogit = mkdtempSync(join(tmpdir(), "nav-nogit-dirty-"));
+  assert.equal(workingTreeDirty(nogit), false, "non-git path must not throw and is not dirty");
 });
 
 test("resolveRepo yields root, name, stable id, and cache db path", () => {

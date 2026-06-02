@@ -3,7 +3,7 @@ import { locate } from "./navigator/locate.ts";
 import { slice } from "./navigator/slice.ts";
 import { VerifiedCache } from "./navigator/verified-cache.ts";
 import type { Db } from "./store/db.ts";
-import type { NavigatorConfig } from "./types.ts";
+import type { NavigatorConfig, RepoStatus } from "./types.ts";
 
 export interface NavigatorCtx {
   db: Db;
@@ -16,16 +16,22 @@ export interface PiLike {
   registerTool(def: any): void;
 }
 
-const NOT_READY_RESULT = {
-  content: [
-    {
-      type: "text" as const,
-      text: "navigator is still indexing or not a git repo — try again in a moment, or run /navigator status",
-    },
-  ],
-};
+function unavailable(status: RepoStatus) {
+  let text: string;
+  switch (status) {
+    case "non_git":
+      text = "navigator is unavailable here: not inside a git repository. Use rg/fd/read to search.";
+      break;
+    case "disabled":
+      text = "navigator is disabled in this project's config. Use rg/fd/read to search.";
+      break;
+    default:
+      text = "navigator is still indexing — try again shortly, or use rg/fd/read meanwhile.";
+  }
+  return { content: [{ type: "text" as const, text }] };
+}
 
-export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): void {
+export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null, getStatus: () => RepoStatus): void {
   // --- navigator_locate ---
   pi.registerTool({
     name: "navigator_locate",
@@ -53,7 +59,7 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
       _ctx: unknown,
     ) {
       const navCtx = getCtx();
-      if (!navCtx) return NOT_READY_RESULT;
+      if (!navCtx) return unavailable(getStatus());
 
       const config = {
         ...navCtx.config,
@@ -64,7 +70,7 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
       // Produce a concise text summary
       const lines: string[] = [];
       if (res.results.length === 0) {
-        lines.push("No results found.");
+        lines.push("No results found — navigator may not cover this query. Fall back to rg/fd/read before concluding it doesn't exist.");
       } else {
         lines.push(`Found ${res.results.length} result(s) for "${params.query}":`);
         for (const r of res.results) {
@@ -82,10 +88,14 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
           }
         }
       }
-      if (!res.index.fresh) {
-        lines.push(
-          `  [index coverage: ${Math.round(res.index.coverage * 100)}% — still building]`,
-        );
+      if (res.index.dirty) {
+        lines.push("  [working tree has uncommitted edits — slices read live bytes, but locate ranking may lag; the writer refreshes in the background]");
+      }
+      if (res.index.coverage < 1) {
+        lines.push(`  [index coverage: ${Math.round(res.index.coverage * 100)}% — still building; some files may be missing]`);
+      }
+      if (res.index.head_behind > 0) {
+        lines.push(`  [index is ${res.index.head_behind} commit(s) behind HEAD — may miss very recent changes; refreshing in background]`);
       }
       if (res.results.length > 0 && res.confidence === "low") {
         lines.push(
@@ -125,7 +135,7 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null): vo
       _ctx: unknown,
     ) {
       const navCtx = getCtx();
-      if (!navCtx) return NOT_READY_RESULT;
+      if (!navCtx) return unavailable(getStatus());
 
       // Some models prefix @ to path arguments — strip it.
       const cleanPath = params.path.startsWith("@") ? params.path.slice(1) : params.path;

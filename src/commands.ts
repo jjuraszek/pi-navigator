@@ -4,6 +4,7 @@ export interface NavigatorState {
   active: boolean;
   coverage: Coverage | null;
   isWriter: boolean;
+  dbPath: string;
   reindex(path?: string): void;
 }
 
@@ -56,6 +57,7 @@ export function registerNavigatorCommand(pi: PiLike, getState: () => NavigatorSt
         const crawl = cov.fullCrawlDone ? "done" : "building";
         msg = `navigator: ${cov.indexed}/${cov.total} indexed (${pct}%), full crawl ${crawl}, writer=${state.isWriter ? "yes" : "no"}`;
       }
+      if (state.dbPath) msg += `\n  db: ${state.dbPath}`;
       ctx.ui.notify(msg, "info");
     },
   });

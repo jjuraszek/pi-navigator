@@ -19,7 +19,7 @@ function fakePi() {
 
 test("navigator_locate guidelines contain navigator-first lead and rg boundary clause", () => {
   const pi = fakePi();
-  registerTools(pi, () => null);
+  registerTools(pi, () => null, () => "non_git");
   const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
   const text = (locateTool.promptGuidelines as string[]).join(" ").toLowerCase();
   assert.ok(text.includes("before"), "must assert navigator before other tools");
@@ -39,7 +39,7 @@ test("navigator_locate guidelines contain navigator-first lead and rg boundary c
 
 test("registers navigator_locate and navigator_slice with tool-named guidelines", () => {
   const pi = fakePi();
-  registerTools(pi, () => null);
+  registerTools(pi, () => null, () => "non_git");
   const names = pi.tools.map((t: any) => t.name).sort();
   assert.deepEqual(names, ["navigator_locate", "navigator_slice"]);
   for (const t of pi.tools) {
@@ -50,26 +50,36 @@ test("registers navigator_locate and navigator_slice with tool-named guidelines"
   }
 });
 
-test("locate tool returns a friendly message when ctx not ready", async () => {
+test("locate tool returns a terminal non-git message (no retry, points at rg/fd)", async () => {
   const pi = fakePi();
-  registerTools(pi, () => null);
+  registerTools(pi, () => null, () => "non_git");
   const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
-  const res = await locateTool.execute("id", { query: "Grid" }, undefined, undefined, {
-    cwd: "/x",
-  });
-  const text = res.content.map((c: any) => c.text).join("");
-  assert.match(text, /index|indexing|not a git/i);
+  const res = await locateTool.execute("id", { query: "Grid" }, undefined, undefined, { cwd: "/x" });
+  const text = res.content.map((c: any) => c.text).join("").toLowerCase();
+  assert.match(text, /not inside a git repository/);
+  assert.match(text, /rg|fd/);
+  assert.doesNotMatch(text, /try again/);
 });
 
-test("slice tool returns a friendly message when ctx not ready", async () => {
+test("locate tool returns a retryable booting message with fallback hint", async () => {
   const pi = fakePi();
-  registerTools(pi, () => null);
+  registerTools(pi, () => null, () => "booting");
+  const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
+  const res = await locateTool.execute("id", { query: "Grid" }, undefined, undefined, { cwd: "/x" });
+  const text = res.content.map((c: any) => c.text).join("").toLowerCase();
+  assert.match(text, /try again/);
+  assert.match(text, /rg|fd/);
+});
+
+test("slice tool returns a non-git message when ctx not ready", async () => {
+  const pi = fakePi();
+  registerTools(pi, () => null, () => "non_git");
   const sliceTool = pi.tools.find((t: any) => t.name === "navigator_slice");
   const res = await sliceTool.execute("id", { path: "app.rb" }, undefined, undefined, {
     cwd: "/x",
   });
-  const text = res.content.map((c: any) => c.text).join("");
-  assert.match(text, /index|indexing|not a git/i);
+  const text = res.content.map((c: any) => c.text).join("").toLowerCase();
+  assert.match(text, /not inside a git repository/);
 });
 
 test("locate tool calls locate() with real indexed db and returns results in details", async () => {
@@ -93,7 +103,7 @@ test("locate tool calls locate() with real indexed db and returns results in det
   const ctx: NavigatorCtx = { db, root: repoDir, cache, config: DEFAULT_CONFIG };
 
   const pi = fakePi();
-  registerTools(pi, () => ctx);
+  registerTools(pi, () => ctx, () => "ready");
   const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
   const res = await locateTool.execute("id", { query: "Grid" }, undefined, undefined, {
     cwd: repoDir,
@@ -108,6 +118,39 @@ test("locate tool calls locate() with real indexed db and returns results in det
   // content should be non-empty text
   const text = res.content.map((c: any) => c.text).join("");
   assert.ok(text.length > 0);
+});
+
+test("locate tool nudges toward rg/fd when zero results", async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), "nav-tools-zero-"));
+  const git = (args: string[]) => execFileSync("git", args, { cwd: repoDir });
+  git(["init", "-q"]);
+  git(["config", "user.email", "t@t.t"]);
+  git(["config", "user.name", "t"]);
+  writeFileSync(join(repoDir, "grid.rb"), "class Grid\n  def sync; end\nend\n");
+  git(["add", "."]);
+  git(["commit", "-qm", "init"]);
+
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-tools-zero-db-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, repoDir, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+
+  const cache = new VerifiedCache();
+  const ctx: NavigatorCtx = { db, root: repoDir, cache, config: DEFAULT_CONFIG };
+
+  const pi = fakePi();
+  registerTools(pi, () => ctx, () => "ready");
+  const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
+  const res = await locateTool.execute(
+    "id",
+    { query: "zzqwxnonexistenttoken" },
+    undefined,
+    undefined,
+    { cwd: repoDir },
+  );
+  const text = res.content.map((c: any) => c.text).join("").toLowerCase();
+  assert.match(text, /no results/);
+  assert.match(text, /rg|fd/);
 });
 
 test("slice tool strips leading @ from path", async () => {
@@ -130,7 +173,7 @@ test("slice tool strips leading @ from path", async () => {
   const ctx: NavigatorCtx = { db, root: repoDir, cache, config: DEFAULT_CONFIG };
 
   const pi = fakePi();
-  registerTools(pi, () => ctx);
+  registerTools(pi, () => ctx, () => "ready");
   const sliceTool = pi.tools.find((t: any) => t.name === "navigator_slice");
 
   // Pass path with @ prefix — tool must strip it

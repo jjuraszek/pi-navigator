@@ -348,11 +348,12 @@ The worker commits every `indexBatchSize` files (default 50) in a `BEGIN IMMEDIA
 `navigator_locate` responses include:
 
 ```json
-{ "index": { "fresh": false, "head_behind": 12, "coverage": 0.74 } }
+{ "index": { "fresh": false, "head_behind": 12, "coverage": 0.74, "dirty": true } }
 ```
 
-- `fresh`: `true` if `meta.head_sha_at_index` == current HEAD.
-- `head_behind`: always `0` in v0.1.0 (commit counting not yet implemented; staleness is indicated by `fresh: false`).
+- `fresh`: `true` only when `meta.head_sha_at_index` == current HEAD **and** the working tree is clean (not dirty). Both conditions must hold.
+- `dirty`: `true` when `git status --porcelain` is non-empty — includes uncommitted tracked edits and untracked files (a new untracked source file is genuinely uncovered by an index keyed on committed state). Slices always read live worktree bytes, so a dirty tree never causes an incorrect read or edit; only locate ranking can lag.
+- `head_behind`: number of commits the indexed HEAD is behind the current HEAD. `0` when HEAD matches, regardless of working-tree dirtiness. Computed via `git rev-list` commit counting.
 - `coverage`: `coverage_indexed / coverage_total`.
 
 `/navigator status` shows these values plus queue depth and lock owner.
@@ -368,7 +369,7 @@ The worker commits every `indexBatchSize` files (default 50) in a `BEGIN IMMEDIA
 ```
 
 - Located outside every worktree so it is shared across all worktrees and all agents/subagents of the same repository.
-- **`repo_id`** = 12-char prefix of the root commit SHA (`git rev-list --max-parents=0 HEAD`). Stable across clones and worktrees. Fallback (non-git): SHA-256 of the realpath of the common git dir.
+- **`repo_id`** = 12-char prefix of the root commit SHA (`git rev-list --max-parents=0 HEAD`). Stable across clones and worktrees. Fallback for a **git repo with no commits** (fresh `git init` before the first commit): SHA-256 of `git rev-parse --git-common-dir`. Navigator does **not** operate outside a git work tree — when cwd is not inside a git repo, `resolveRepo` returns `dbPath: ""`, no index file is created, and the tools return a terminal "not inside a git repository — use rg/fd/read" message.
 - **`repo_name`** = basename of the worktree top-level directory (human-readable filename).
 
 ### Single-Writer Advisory Lock
@@ -381,6 +382,10 @@ A `<db>.lock` file carries `{ pid, mtime }`. Lock acquisition:
 - On `turn_end` → refresh the lock's mtime to prevent stale reclaim while the session is active.
 
 Writers use `BEGIN IMMEDIATE` transactions to avoid write contention. Readers (`locate`, `slice`) always proceed without locking under WAL. N parallel subagents on the same repo produce one indexer (the lock holder) and N-1 read-only consumers - no duplicate indexing, no prompt-tax amplification.
+
+### One Index Per Repository (Isolation Invariant)
+
+Navigator maintains exactly one index per repository identity, keyed by the repository's root-commit sha (`repoId`). All worktrees of that repository share the one index. Navigator operates only inside a git work tree; outside one it is fully dormant — no DB, no worker — and `navigator_locate`/`navigator_slice` return a terminal "not inside a git repository — use rg/fd/read" message. The freshness flag reported by `navigator_locate` reflects both HEAD distance (`head_behind`) and working-tree dirtiness (`dirty`); slices always read live worktree bytes, so isolation and ground-truth reads hold regardless of index state.
 
 ### Branch Divergence
 
