@@ -50,16 +50,14 @@ test("enumerateFiles skips secrets and respects gitignore", () => {
   assert.ok(!paths.some((p) => p.startsWith("node_modules/")), "node_modules must be excluded");
 });
 
-test("enumerateFiles non-git fallback returns files", () => {
+test("enumerateFiles is a no-op outside a git repo", () => {
+  // Navigator is git-gated: outside a repository it must index nothing,
+  // never falling back to an unguarded filesystem walk (no .gitignore
+  // protection, undefined repo identity / co-change / recency).
   const d = mkdtempSync(join(tmpdir(), "nav-walk-nongit-"));
   writeFileSync(join(d, "model.rb"), "class M; end");
   writeFileSync(join(d, "script.py"), "pass");
-  const results = enumerateFiles(d);
-  const paths = results.map((f) => f.path);
-  assert.ok(paths.includes("model.rb"), "should find model.rb");
-  assert.ok(paths.includes("script.py"), "should find script.py");
-  const rb = results.find((f) => f.path === "model.rb");
-  assert.equal(rb?.lang, "ruby");
+  assert.deepEqual(enumerateFiles(d), [], "non-git dir must yield no files");
 });
 
 test("enumerateFiles ignores tracked symlinks (file and dir targets)", () => {
@@ -81,20 +79,6 @@ test("enumerateFiles ignores tracked symlinks (file and dir targets)", () => {
   assert.ok(!paths.some((p) => p.startsWith("linkdir")), "symlinked dir must not be walked");
 });
 
-test("enumerateFiles non-git fallback ignores symlinks", () => {
-  const d = mkdtempSync(join(tmpdir(), "nav-walk-symlink-nogit-"));
-  writeFileSync(join(d, "real.rb"), "class R; end");
-  mkdirSync(join(d, "sub"), { recursive: true });
-  writeFileSync(join(d, "sub/x.py"), "pass");
-  symlinkSync("real.rb", join(d, "alias.rb"));
-  symlinkSync("sub", join(d, "sublink"));
-  const paths = enumerateFiles(d).map((f) => f.path).sort();
-  assert.ok(paths.includes("real.rb"), "real file should be found");
-  assert.ok(paths.includes("sub/x.py"), "real nested file should be found");
-  assert.ok(!paths.includes("alias.rb"), "symlinked file must not appear");
-  assert.ok(!paths.some((p) => p.startsWith("sublink")), "symlinked dir must not be walked");
-});
-
 test("langOf maps prose extensions to 'prose'", () => {
   for (const p of ["a.md", "b.markdown", "c.txt", "d.rst", "e.adoc"]) {
     assert.equal(langOf(p), "prose");
@@ -103,18 +87,3 @@ test("langOf maps prose extensions to 'prose'", () => {
   assert.equal(langOf("g.bin"), null);
 });
 
-test("non-git fallback applies secret + denylist filters", () => {
-  const d = mkdtempSync(join(tmpdir(), "nav-walk-nogit2-"));
-  writeFileSync(join(d, "model.rb"), "class M; end");
-  writeFileSync(join(d, ".env"), "S=1");
-  writeFileSync(join(d, "id_rsa"), "k");
-  // Uppercase extension — locks in case-insensitive matching (Fix 1).
-  writeFileSync(join(d, "secret.PEM"), "k");
-  mkdirSync(join(d, "node_modules")); writeFileSync(join(d, "node_modules/x.js"), "1");
-  const paths = enumerateFiles(d).map((f) => f.path);
-  assert.ok(paths.includes("model.rb"), "model.rb should be found");
-  for (const bad of [".env", "id_rsa", "secret.PEM"]) {
-    assert.ok(!paths.includes(bad), `leaked: ${bad}`);
-  }
-  assert.ok(!paths.some((p) => p.startsWith("node_modules/")), "node_modules must be excluded");
-});

@@ -4,6 +4,20 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Changed
+- **Git-gated activation.** The navigator now stays fully dormant outside a git
+  repository: `session_start` checks `repo.isGit` and, when false, sets an
+  `inactive (not a git repo)` status and returns before opening the DB, spawning
+  the worker, or initialising parsers. `navigator_locate` / `navigator_slice`
+  report inactive, and `/navigator status|reindex` short-circuit with an
+  `inactive` notice. Prevents an unguarded crawl of an arbitrary cwd (e.g.
+  `$HOME`, `/tmp`) where `.gitignore` offers no protection and the repo-id /
+  co-change / recency signals are undefined.
+- **Non-git fallback removed.** `enumerateFiles` is now a no-op (`[]`) outside a
+  git repo instead of recursively walking the directory tree; the manual
+  `walkDir` enumerator is deleted. This is defense-in-depth behind the
+  `session_start` gate above.
+
 ## [v0.2.1] - 2026-06-02
 
 ### Added
@@ -22,7 +36,7 @@ All notable changes are documented here. Newest first.
   (`bus`, `parser`) deliberately do **not** trigger exact-def pinning: they may
   also be class names, but treating them as exact anchors would flood results
   across subsystems and re-introduce the over-trust trap. Verified against the
-  example-monorepo eval: P1 (`ClassificationResponse`) collapses to a single
+  eval suite: P1 (`ClassificationResponse`) collapses to a single
   high-confidence `navigator_locate` call returning both definition sites; the
   conceptual P2/P3 queries stay low-confidence and fall back as before.
 

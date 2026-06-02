@@ -163,7 +163,7 @@ test("single-token query unaffected by AND-first change", async () => {
 });
 
 // --- exact symbol-definition recall (v0.2.1) -------------------------------
-// Regression for the example-monorepo P1 failure: the agent queries a precise symbol
+// Regression for the exact-symbol recall failure (P1): the agent queries a precise symbol
 // plus prose ("ClassificationResponse class definition"). The defining source
 // file lacks the word "definition", so AND→0→OR fallback, and prose docs that
 // spell out all three words outrank the real definition site. An identifier-
@@ -219,7 +219,7 @@ test("bare CamelCase token resolves to the definition even when FTS dilutes", as
 test("common dictionary-word token does NOT force exact-def pinning", async () => {
   // 'bus' is a real class name AND a common word; a lowercase dictionary token
   // must stay on the normal FTS path (no def-injection, no forced high) so it
-  // never floods or over-trusts. Mirrors the example-monorepo P2 safety property.
+  // never floods or over-trusts. Mirrors the P2 over-trust safety property.
   const d = mkdtempSync(join(tmpdir(), "nav-busword-"));
   const git = (a: string[]) => execFileSync("git", a, { cwd: d });
   git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);

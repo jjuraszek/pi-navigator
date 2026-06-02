@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { basename, extname, join, relative, sep } from "node:path";
 import type { Lang } from "../types.ts";
 
@@ -130,41 +130,13 @@ function gitFiles(root: string): string[] {
   return Array.from(seen);
 }
 
-function walkDir(root: string, rel: string, out: string[]): void {
-  const abs = rel ? join(root, rel) : root;
-  for (const name of readdirSync(abs)) {
-    const relChild = rel ? `${rel}/${name}` : name;
-    const child = join(abs, name);
-    let st;
-    try {
-      st = lstatSync(child);
-    } catch {
-      continue;
-    }
-    // Skip symlinks: following them risks cycles, re-indexing the same content,
-    // or recursing out of the repo. Matches the git-mode filter above.
-    if (st.isSymbolicLink()) continue;
-    if (st.isDirectory()) {
-      // Denylist applies to directories only; a regular file named "dist" is fine.
-      if (ALWAYS_IGNORE_DIRS.has(name)) continue;
-      walkDir(root, relChild, out);
-    } else if (st.isFile()) {
-      // Normalize separators for non-POSIX systems
-      out.push(relChild.split(sep).join("/"));
-    }
-  }
-}
-
 export function enumerateFiles(root: string): { path: string; lang: Lang | null }[] {
-  let rawPaths: string[];
-
-  if (isGitRepo(root)) {
-    rawPaths = gitFiles(root);
-  } else {
-    const list: string[] = [];
-    walkDir(root, "", list);
-    rawPaths = list;
-  }
+  // Navigator only indexes git repositories. Outside one, return nothing:
+  // the repo-id / co-change / recency model is undefined, and an unguarded
+  // filesystem walk would index files with no .gitignore protection. Activation
+  // is already git-gated in index.ts; this is the defense-in-depth no-op.
+  if (!isGitRepo(root)) return [];
+  const rawPaths = gitFiles(root);
 
   const results: { path: string; lang: Lang | null }[] = [];
   for (const p of rawPaths) {

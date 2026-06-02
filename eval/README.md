@@ -4,6 +4,6 @@
 
 Run against this repo: `node eval/run.ts --repo /path/to/pi-navigator`
 
-Run against another repo (e.g. example-monorepo): `node eval/run.ts --repo /path/to/example-monorepo` — update `cases.jsonl` with cases meaningful for that repo first.
+Run against another repo: `node eval/run.ts --repo /path/to/repo` — update `cases.jsonl` with cases meaningful for that repo first.
 
 Optional: `--k <n>` sets the hit@k window (default 5).

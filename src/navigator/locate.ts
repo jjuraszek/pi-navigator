@@ -16,7 +16,7 @@ import type {
  * trigger the exact symbol-definition lookup. A bare lowercase dictionary word
  * ("bus", "parser") is deliberately excluded: it may also be a class name, but
  * treating it as an exact-symbol anchor would flood results across subsystems
- * and over-trust a lexically-seductive match (the example-monorepo P2 trap).
+ * and over-trust a lexically-seductive match (the over-trust trap, P2).
  */
 function isIdentifierLike(token: string): boolean {
   return /_/.test(token) || /[0-9]/.test(token) || /[a-z][A-Z]/.test(token);

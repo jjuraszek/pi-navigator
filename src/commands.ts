@@ -1,6 +1,7 @@
 import type { Coverage } from "./types.ts";
 
 export interface NavigatorState {
+  active: boolean;
   coverage: Coverage | null;
   isWriter: boolean;
   reindex(path?: string): void;
@@ -26,6 +27,11 @@ export function registerNavigatorCommand(pi: PiLike, getState: () => NavigatorSt
     handler: async (args: string, ctx: any) => {
       const parsed = parseSub(args);
       const state = getState();
+
+      if (!state.active) {
+        ctx.ui.notify("navigator: inactive (not a git repository)", "info");
+        return;
+      }
 
       if (parsed.sub === "reindex") {
         if (!state.isWriter) {

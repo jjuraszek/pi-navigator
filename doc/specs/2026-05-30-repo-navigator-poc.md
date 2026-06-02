@@ -22,7 +22,7 @@
 ## 1. Problem & Goal
 
 A coding agent rediscovers a repository from scratch every session. On a large
-polyglot monorepo (the motivating target: `example-monorepo` — ~6k files, ~8.4k
+polyglot monorepo (the motivating target: a large Rails + Python monorepo — ~6k files, ~8.4k
 commits, Rails `dashboard` + several Python services) this means many
 exploratory `rg`/`fd`/`read` round-trips before any reasoning happens.
 

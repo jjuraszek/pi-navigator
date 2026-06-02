@@ -1167,7 +1167,7 @@ Design (spec §3, §6.1, §9): default factory:
 
 Design: each line `{ "query": "...", "expect": ["path/a.rb"] }`. `eval/run.ts` builds an index over a target repo (arg `--repo <path>`, default cwd), runs `locate` per case, computes hit@1/hit@5, and runs an `rg`-based baseline (`rg -l <query terms>`) counting whether expected files appear and how many candidate files rg returns. Prints a table.
 
-- [ ] **Step 1: Write `eval/cases.jsonl`** with 8–12 real cases for a chosen repo (document which repo in a header comment line `# repo: example-monorepo`).
+- [ ] **Step 1: Write `eval/cases.jsonl`** with 8–12 real cases for a chosen repo (document which repo in a header comment line `# repo: <name>`).
 - [ ] **Step 2: Write `eval/run.ts`** (full: arg parse, build index via `runIndexPass`, loop cases, compute metrics, print).
 - [ ] **Step 3: Run**
 

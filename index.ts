@@ -41,6 +41,7 @@ export default function (pi: ExtensionAPI): void {
   // Register tools and command at load-time with late-bound state getters.
   registerTools(pi, () => state);
   registerNavigatorCommand(pi, () => ({
+    active: rolling !== null,
     coverage: rolling?.coverage ?? null,
     isWriter: rolling?.isWriter ?? false,
     reindex: (p?: string) => rolling?.reindex(p),
@@ -55,6 +56,15 @@ export default function (pi: ExtensionAPI): void {
 
     sessionCwd = ctx.cwd;
     const repo = resolveRepo(ctx.cwd, config);
+
+    // Git-gating: navigator only activates inside a git repository. Outside one,
+    // every signal it relies on (repo identity, co-change, recency) is undefined,
+    // and walking an arbitrary cwd would index files with no .gitignore
+    // protection. Stay fully dormant: no DB, no worker, tools report inactive.
+    if (!repo.isGit) {
+      ctx.ui.setStatus("navigator", "navigator: inactive (not a git repo)");
+      return;
+    }
 
     // Open a read/write DB handle on the main thread.
     // Bootstrap exception: migrate is idempotent + WAL-serialised; safe for non-writers

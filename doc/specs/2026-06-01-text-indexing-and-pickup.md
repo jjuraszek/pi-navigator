@@ -6,7 +6,7 @@
 
 ## 1. Motivation
 
-A replay of 128 real `~/repos/example-monorepo` pi sessions measured the find→read→edit
+A replay of 128 real pi sessions on a large polyglot monorepo measured the find→read→edit
 loop the navigator is built to shorten. Findings:
 
 - **Baseline orient cost is real:** 5.97 orient ops per edit (3.73 searches +

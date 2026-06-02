@@ -97,7 +97,7 @@ Applied at index time, in order:
 5. **Stoplists** (§6.3).
 
 ### 6.3 Stoplists (defaults carry the value; config is optional/additive)
-Static, deterministic. Validated against `../example-monorepo` token-frequency scan (Ruby/Python/SQL) plus general knowledge for popular languages.
+Static, deterministic. Validated against a large polyglot repo's token-frequency scan (Ruby/Python/SQL) plus general knowledge for popular languages.
 
 | Layer | Contents (defaults) |
 |---|---|
@@ -121,7 +121,7 @@ export const DEFAULT_CROSS_LANG_STOPLIST: readonly string[];       // code-noise
 ```
 
 The effective stoplist for a file of language `L` is built once and cached as a `Set<string>`:
-`DEFAULT_STOPLISTS[L]` ∪ `DEFAULT_CROSS_LANG_STOPLIST` ∪ `config.keywordStoplist`. Merge order is union-then-dedup (order does not matter for a set); all entries are lowercased on construction to match the lowercased tokens from §6.2 step 1. User `keywordStoplist` only ever **adds** terms — there is no removal/override mechanism in this iteration. The scan confirmed `plant voltage unit label company section field` are high-frequency in example-monorepo but are legitimate search targets. Hardcoding them would break a domain user. Their corpus-relative frequency is handled by BM25-IDF (§6.4), not the static list.
+`DEFAULT_STOPLISTS[L]` ∪ `DEFAULT_CROSS_LANG_STOPLIST` ∪ `config.keywordStoplist`. Merge order is union-then-dedup (order does not matter for a set); all entries are lowercased on construction to match the lowercased tokens from §6.2 step 1. User `keywordStoplist` only ever **adds** terms — there is no removal/override mechanism in this iteration. The scan confirmed that domain-specific nouns (e.g. `plant voltage unit label company section field`) are high-frequency in a given corpus but are legitimate search targets. Hardcoding them would break a domain user. Their corpus-relative frequency is handled by BM25-IDF (§6.4), not the static list.
 
 ### 6.4 BM25-IDF handles corpus-common terms (no global bookkeeping)
 Tokens that survive the static filters but appear in nearly every file (e.g. `params`, `self` slipping through, or domain-ubiquitous `plant`) score ≈0 via FTS5 BM25's built-in inverse-document-frequency term. This is computed by FTS5 at query time from the index — **no maintained token→df table, no second pass, no re-extraction when df shifts.** This is what keeps the rolling/incremental indexer fast.
