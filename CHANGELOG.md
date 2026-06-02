@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-06-02
+
 ### Added
 - **Repo-isolation gating with a `disabled` state.** `RepoStatus` is now
   `"booting" | "non_git" | "disabled" | "ready"`. `navigator_locate` /
