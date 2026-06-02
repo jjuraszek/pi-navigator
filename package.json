@@ -1,6 +1,6 @@
 {
   "name": "pi-navigator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "pi extension: worktree-aware repository navigator for faster find-read-update",
   "type": "module",
   "keywords": [

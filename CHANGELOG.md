@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-06-02
+
 ### Fixed
 - **Symlinks are never indexed.** `gitFiles` reads `git ls-files --stage` and drops
   modes `120000` (symlink) and `160000` (gitlink); untracked entries are
