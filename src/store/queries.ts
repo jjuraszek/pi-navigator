@@ -153,6 +153,46 @@ export function ftsUpsert(
 }
 
 // ---------------------------------------------------------------------------
+// Exact symbol-definition lookup
+// ---------------------------------------------------------------------------
+
+export interface SymbolDefRow {
+  path: string;
+  file_id: number;
+  name: string;
+  kind: string;
+  lang: string | null;
+  commits_30d: number;
+  last_commit_at: number | null;
+}
+
+/**
+ * Files that DEFINE a symbol whose name exactly equals one of `names`
+ * (case-insensitive). Bypasses the FTS porter tokenizer entirely: the FTS
+ * columns split/stem identifiers, so a CamelCase query token never retrieves
+ * its own definition site through MATCH. This direct symbols-table lookup
+ * (backed by idx_symbols_name) restores that recall.
+ *
+ * Caller is responsible for gating which query tokens are passed here
+ * (identifier-shaped only) so common dictionary words that happen to be class
+ * names do not flood results.
+ */
+export function findSymbolDefs(db: Db, names: string[]): SymbolDefRow[] {
+  if (names.length === 0) return [];
+  const lowered = names.map((n) => n.toLowerCase());
+  const placeholders = lowered.map(() => "?").join(",");
+  return db
+    .prepare(
+      `SELECT f.path AS path, f.id AS file_id, s.name AS name, s.kind AS kind,
+              f.lang AS lang, f.commits_30d AS commits_30d, f.last_commit_at AS last_commit_at
+       FROM symbols s
+       JOIN files f ON f.id = s.file_id
+       WHERE lower(s.name) IN (${placeholders})`,
+    )
+    .all(...lowered) as unknown as SymbolDefRow[];
+}
+
+// ---------------------------------------------------------------------------
 // Reference fan-in
 // ---------------------------------------------------------------------------
 

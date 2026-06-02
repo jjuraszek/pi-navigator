@@ -1,5 +1,5 @@
 import type { Db } from "../store/db.ts";
-import { getMeta, getCoverage, refFanIn } from "../store/queries.ts";
+import { getMeta, getCoverage, refFanIn, findSymbolDefs } from "../store/queries.ts";
 import { headSha } from "../worktree.ts";
 import { countCommitsBetween } from "../indexer/git.ts";
 import { score, pathMatch, recencyBoost, COLUMN_WEIGHTS, applyTestPenalty } from "./rank.ts";
@@ -9,6 +9,18 @@ import type {
   LocateResult,
   LocateSignals,
 } from "../types.ts";
+
+/**
+ * An identifier-shaped query token: CamelCase (a lowercase/digit followed by an
+ * uppercase letter), snake_case (contains "_"), or contains a digit. Only these
+ * trigger the exact symbol-definition lookup. A bare lowercase dictionary word
+ * ("bus", "parser") is deliberately excluded: it may also be a class name, but
+ * treating it as an exact-symbol anchor would flood results across subsystems
+ * and over-trust a lexically-seductive match (the example-monorepo P2 trap).
+ */
+function isIdentifierLike(token: string): boolean {
+  return /_/.test(token) || /[0-9]/.test(token) || /[a-z][A-Z]/.test(token);
+}
 
 /** Escape a token so it is safe to use as a bare FTS5 term (wrap in double-quotes). */
 function ftsEscape(token: string): string {
@@ -108,12 +120,24 @@ export function locate(
     }
   }
 
-  if (ftsRows.length === 0) return empty;
+  // --- exact symbol-definition recall ---
+  // Identifier-shaped query tokens are looked up directly in the symbols table,
+  // bypassing FTS tokenization (which splits/stems CamelCase so a precise symbol
+  // query never retrieves its own definition site). Matched definition files are
+  // pinned above pure-FTS hits and make the result high-confidence.
+  const idTokens = query
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && isIdentifierLike(t));
+  const defRows = idTokens.length > 0 ? findSymbolDefs(db, idTokens) : [];
+  const defPaths = new Set(defRows.map((r) => r.path));
+  const hasExactDef = defPaths.size > 0;
+
+  if (ftsRows.length === 0 && !hasExactDef) return empty;
 
   // --- compute bm25 normalisation: fts = -b (positive; larger = better match) ---
   // The most-negative b is the best match; negating makes it the largest fts value.
   // We additionally shift all values so the worst candidate is at 0 (keeps signal ≥ 0).
-  const maxB = Math.max(...ftsRows.map((r) => r.b)); // least-negative (worst)
+  const maxB = ftsRows.length > 0 ? Math.max(...ftsRows.map((r) => r.b)) : 0; // least-negative (worst)
   // ftsNorm(row) = maxB - row.b  (≥ 0; best row gets largest value)
 
   // --- query tokens for the symbol-exact signal ---
@@ -127,39 +151,59 @@ export function locate(
     `SELECT id, lang, commits_30d, last_commit_at FROM files WHERE path = ?`,
   );
 
-  // --- score each candidate ---
-  const scored: Array<{ row: FtsRow; meta: FileMeta; totalScore: number; signals: LocateSignals }> =
-    [];
+  // --- assemble candidate set: FTS rows + any exact-def files not already present ---
+  const candidatePaths = new Map<string, FtsRow | null>();
+  for (const row of ftsRows) candidatePaths.set(row.path, row);
+  for (const d of defRows) {
+    if (!candidatePaths.has(d.path)) candidatePaths.set(d.path, null);
+  }
 
-  for (const row of ftsRows) {
-    const meta = fileMetaStmt.get(row.path) as FileMeta | undefined;
+  // --- score each candidate ---
+  const scored: Array<{
+    path: string;
+    meta: FileMeta;
+    totalScore: number;
+    signals: LocateSignals;
+    isExactDef: boolean;
+  }> = [];
+
+  for (const [path, row] of candidatePaths) {
+    const meta = fileMetaStmt.get(path) as FileMeta | undefined;
     if (!meta) continue; // file deleted between index and query
 
-    // fts signal: shift so best = maxB - minB (all ≥ 0)
-    const fts = maxB - row.b;
+    // fts signal: shift so best = maxB - minB (all ≥ 0); 0 for def-only files.
+    const fts = row ? maxB - row.b : 0;
 
     // path signal
-    const pathSig = pathMatch(query, row.path);
+    const pathSig = pathMatch(query, path);
 
-    // symbol-exact signal: any query token exactly equals a symbol name (case-insensitive)
-    const symbolNames = row.symbol_names
+    // symbol-exact signal: an exact symbol-definition match (identifier-gated),
+    // or — for FTS rows — any query token equal to a stored symbol-name token.
+    const isExactDef = defPaths.has(path);
+    const symbolNames = row?.symbol_names
       ? row.symbol_names.toLowerCase().split(/\s+/)
       : [];
-    const symbolSig = queryTokens.some((t) => symbolNames.includes(t)) ? 1 : 0;
+    const symbolSig =
+      isExactDef || queryTokens.some((t) => symbolNames.includes(t)) ? 1 : 0;
 
     // recency signal
     const recency = recencyBoost(meta.commits_30d, meta.last_commit_at, nowSeconds);
 
     const signals: LocateSignals = { fts, path: pathSig, symbol: symbolSig, recency };
-    const totalScore = applyTestPenalty(score(signals), row.path);
+    const totalScore = applyTestPenalty(score(signals), path);
 
-    scored.push({ row, meta, totalScore, signals });
+    scored.push({ path, meta, totalScore, signals, isExactDef });
   }
 
   if (scored.length === 0) return empty;
 
-  // sort descending by score
-  scored.sort((a, b) => b.totalScore - a.totalScore);
+  // Exact symbol-definition matches are pinned ahead of pure-FTS hits: an exact
+  // identifier match is the strongest possible anchor, so it must not be diluted
+  // by prose docs that merely mention the term. Ties broken by composite score.
+  scored.sort((a, b) => {
+    if (a.isExactDef !== b.isExactDef) return a.isExactDef ? -1 : 1;
+    return b.totalScore - a.totalScore;
+  });
   const topN = scored.slice(0, config.maxLocateResults);
 
   // --- load symbols for each top result ---
@@ -171,10 +215,10 @@ export function locate(
      ORDER BY s.start_line`,
   );
 
-  const results: LocateResult[] = topN.map(({ row, meta, totalScore, signals }) => {
-    const syms = symbolsStmt.all(row.path) as unknown as SymbolRow[];
+  const results: LocateResult[] = topN.map(({ path, meta, totalScore, signals }) => {
+    const syms = symbolsStmt.all(path) as unknown as SymbolRow[];
     return {
-      path: row.path,
+      path,
       lang: meta.lang as import("../types.ts").Lang | null,
       score: totalScore,
       signals,
@@ -191,10 +235,15 @@ export function locate(
   // (b) the top hit has no structural anchor (matched only on keyword/content,
   // not symbol name or path). Both are the cases where the prior eval saw the
   // agent confidently pick a lexically-seductive wrong file.
+  // An exact symbol-definition match is an unambiguous anchor → always high,
+  // even when the FTS arm fell back to OR on the surrounding prose tokens.
   const top = results[0];
   const topHasAnchor = top.signals.symbol > 0 || top.signals.path > 0;
-  const confidence: "high" | "low" =
-    (usedOrFallback && queryTokenCount >= 2) || !topHasAnchor ? "low" : "high";
+  const confidence: "high" | "low" = hasExactDef
+    ? "high"
+    : (usedOrFallback && queryTokenCount >= 2) || !topHasAnchor
+      ? "low"
+      : "high";
 
   // --- cluster fan-out for the top result ---
   const anchor = results[0];

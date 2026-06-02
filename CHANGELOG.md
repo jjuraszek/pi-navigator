@@ -4,6 +4,26 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Added
+- **Exact symbol-definition recall.** `navigator_locate` now does a direct
+  `symbols`-table lookup (`findSymbolDefs`, backed by `idx_symbols_name`) for
+  identifier-shaped query tokens (CamelCase / snake_case / digit-bearing),
+  bypassing the FTS porter tokenizer. The FTS columns split and stem
+  identifiers, so a CamelCase query token (`ClassificationResponse`) could never
+  retrieve its own definition site through `MATCH` — prose docs that spell the
+  name out won the OR fallback instead. Matched definition files are now pinned
+  above pure-FTS hits and make the result `confidence: "high"`, even when the FTS
+  arm fell back to OR on surrounding prose tokens.
+
+### Changed
+- **Identifier-gated, not word-gated.** Bare lowercase dictionary tokens
+  (`bus`, `parser`) deliberately do **not** trigger exact-def pinning: they may
+  also be class names, but treating them as exact anchors would flood results
+  across subsystems and re-introduce the over-trust trap. Verified against the
+  example-monorepo eval: P1 (`ClassificationResponse`) collapses to a single
+  high-confidence `navigator_locate` call returning both definition sites; the
+  conceptual P2/P3 queries stay low-confidence and fall back as before.
+
 ## [v0.2.0] - 2026-06-02
 
 ### Fixed

@@ -162,6 +162,83 @@ test("single-token query unaffected by AND-first change", async () => {
   );
 });
 
+// --- exact symbol-definition recall (v0.2.1) -------------------------------
+// Regression for the example-monorepo P1 failure: the agent queries a precise symbol
+// plus prose ("ClassificationResponse class definition"). The defining source
+// file lacks the word "definition", so AND→0→OR fallback, and prose docs that
+// spell out all three words outrank the real definition site. An identifier-
+// shaped query token must pin its exact symbol-definition file to the top and
+// report high confidence regardless of FTS dilution.
+async function symbolVsDocFixture() {
+  const d = mkdtempSync(join(tmpdir(), "nav-symdoc-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  writeFileSync(join(d, "model.rb"), "class ClassificationResponse\n  def call; end\nend\n");
+  mkdirSync(join(d, "docs"), { recursive: true });
+  // Prose doc spells out every query word many times → wins the OR fallback.
+  writeFileSync(
+    join(d, "docs", "design.md"),
+    [
+      "# ClassificationResponse class definition",
+      "The ClassificationResponse class definition describes the response.",
+      "This ClassificationResponse class definition is a definition of the class.",
+      "Refer to the ClassificationResponse class definition for the response definition.",
+    ].join("\n") + "\n",
+  );
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-symdocdb-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  return { db, root: d };
+}
+
+test("exact CamelCase symbol pins the definition site above prose docs", async () => {
+  const { db, root } = await symbolVsDocFixture();
+  const res = locate(db, root, "ClassificationResponse class definition", DEFAULT_CONFIG);
+  assert.ok(res.results.length > 0, "should return results");
+  assert.equal(
+    res.results[0].path,
+    "model.rb",
+    "exact symbol-definition file must outrank the prose doc",
+  );
+  assert.equal(res.confidence, "high", "an exact symbol-definition match is high-confidence");
+});
+
+test("bare CamelCase token resolves to the definition even when FTS dilutes", async () => {
+  const { db, root } = await symbolVsDocFixture();
+  const res = locate(db, root, "ClassificationResponse", DEFAULT_CONFIG);
+  assert.ok(
+    res.results.some((r) => r.path === "model.rb"),
+    "definition site must be present for a bare exact-symbol query",
+  );
+  assert.equal(res.results[0].path, "model.rb", "definition site ranks first");
+  assert.equal(res.confidence, "high");
+});
+
+test("common dictionary-word token does NOT force exact-def pinning", async () => {
+  // 'bus' is a real class name AND a common word; a lowercase dictionary token
+  // must stay on the normal FTS path (no def-injection, no forced high) so it
+  // never floods or over-trusts. Mirrors the example-monorepo P2 safety property.
+  const d = mkdtempSync(join(tmpdir(), "nav-busword-"));
+  const git = (a: string[]) => execFileSync("git", a, { cwd: d });
+  git(["init", "-q"]); git(["config", "user.email", "a@b.c"]); git(["config", "user.name", "t"]);
+  writeFileSync(join(d, "bus.rb"), "class Bus\n  def feeder; end\nend\n");
+  writeFileSync(join(d, "widget.rb"), "class Widget; end\n");
+  git(["add", "."]); git(["commit", "-qm", "init"]);
+  await initParsers(["ruby"]);
+  const db = openDb(join(mkdtempSync(join(tmpdir(), "nav-buswddb-")), "i.db"));
+  migrate(db);
+  runIndexPass(db, d, DEFAULT_CONFIG, { batchSize: 50, priority: [] });
+  // Two unrelated lowercase words that never co-occur → OR fallback → low.
+  const res = locate(db, d, "bus widget", DEFAULT_CONFIG);
+  assert.equal(
+    res.confidence,
+    "low",
+    "lowercase dictionary tokens must not be treated as exact-symbol anchors",
+  );
+});
+
 test("single all-terms result is kept (no OR dilution)", async () => {
   const d = mkdtempSync(join(tmpdir(), "nav-nodilute-"));
   const git = (a: string[]) => execFileSync("git", a, { cwd: d });
