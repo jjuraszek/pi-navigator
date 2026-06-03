@@ -81,6 +81,13 @@ function isGitRepo(root: string): boolean {
 // so tracked files cost no extra syscall.
 const SKIP_GIT_MODES = new Set(["120000", "160000"]);
 
+// execFileSync defaults to a 1MB maxBuffer; once git's stdout exceeds it the
+// child is killed with SIGTERM and the call throws ENOBUFS. A large repo (or
+// running from a directory with many untracked files) blows past 1MB easily,
+// so give git room. 512MB is well beyond any plausible file-list size while
+// still bounding runaway memory.
+const GIT_MAX_BUFFER = 512 * 1024 * 1024;
+
 function gitFiles(root: string): string[] {
   // Tracked files via --stage so we can read each entry's mode and drop
   // symlinks/gitlinks. -z is NUL-delimited; within a record the format is
@@ -88,7 +95,7 @@ function gitFiles(root: string): string[] {
   const trackedRaw = execFileSync(
     "git",
     ["ls-files", "-z", "--stage"],
-    { cwd: root, stdio: ["ignore", "pipe", "ignore"] }
+    { cwd: root, stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_MAX_BUFFER }
   )
     .toString()
     .split("\0")
@@ -107,7 +114,7 @@ function gitFiles(root: string): string[] {
   const untrackedRaw = execFileSync(
     "git",
     ["ls-files", "-z", "--others", "--exclude-standard"],
-    { cwd: root, stdio: ["ignore", "pipe", "ignore"] }
+    { cwd: root, stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_MAX_BUFFER }
   )
     .toString()
     .split("\0")

@@ -33,6 +33,6 @@ node -e '
 ' "$next" "$date"
 git add package.json CHANGELOG.md
 git commit -m "release: v$next"
-git tag "v$next"
-git push --follow-tags
+git tag -a "v$next" -m "v$next"
+git push origin HEAD --follow-tags
 echo "tagged v$next"

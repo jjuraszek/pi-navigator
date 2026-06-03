@@ -4,6 +4,14 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Fixed
+- **Worker crash (`ENOBUFS`) on large trees.** `gitFiles()` ran
+  `execFileSync("git", ["ls-files", …])` with Node's default 1MB `maxBuffer`.
+  Running from a directory whose tracked/untracked file list exceeds 1MB killed
+  the child with `SIGTERM` and threw `ENOBUFS`, taking down the indexer worker.
+  Both `ls-files` invocations now pass a 512MB `maxBuffer` (matching the
+  existing `git log` cap in `git.ts`).
+
 ## [v0.3.1] - 2026-06-03
 
 ### Fixed
