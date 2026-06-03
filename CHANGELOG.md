@@ -4,6 +4,33 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-06-03
+
+### Added
+- **Self-healing writer-lock election.** Read-only sessions no longer stay
+  stuck on `navigator: (read-only)` until restart. `RollingIndexer` now runs a
+  20s `.unref()`'d heartbeat that refreshes the lock while it holds writer role
+  and re-acquires/promotes when it does not — so when the writer session ends,
+  a surviving read-only session self-promotes within one heartbeat and its
+  worker resumes indexing. `onPromote(cb)` fires on promotion; `index.ts`
+  flips the status footer to `"indexing…"`.
+- **pid-liveness lock reclaim.** `acquire()` reclaims a confirmed-dead
+  *same-host* holder via `process.kill(pid, 0)` before the 60s TTL, so a
+  crashed/killed writer no longer blocks indexing for up to a minute. The
+  lockfile gains a `host` field; cross-host or host-absent lockfiles fall back
+  to mtime/TTL-only (pids are meaningless across machines). `isProcessAlive`
+  treats `ESRCH` as dead and any other error (`EPERM`, Windows
+  `ERR_UNKNOWN_SIGNAL`) as alive — never reclaiming on an ambiguous probe.
+
+### Changed
+- **Crash recovery for the indexing worker.** On worker `error`/non-zero
+  `exit`, `RollingIndexer` releases the lock and drops writer role so the next
+  heartbeat re-acquires and respawns; `_workerError` clears on successful
+  respawn; last-known-good coverage is preserved. `start()` rolls back on a
+  synchronous spawn throw and always arms the heartbeat; double-`start()` is a
+  no-op. Lock refresh moved off `turn_end` onto the heartbeat timer, closing
+  the idle-holder steal window.
+
 ## [v0.3.2] - 2026-06-03
 
 ### Fixed
