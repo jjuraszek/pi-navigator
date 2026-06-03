@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.3.2] - 2026-06-03
+
 ### Fixed
 - **Worker crash (`ENOBUFS`) on large trees.** `gitFiles()` ran
   `execFileSync("git", ["ls-files", …])` with Node's default 1MB `maxBuffer`.
