@@ -121,6 +121,9 @@ export default function (pi: ExtensionAPI): void {
     rolling.onCoverage((cov) => {
       if (rolling?.isWriter) ui?.setStatus("navigator", statusLabel(cov));
     });
+    rolling.onPromote(() => {
+      ui?.setStatus("navigator", "navigator: indexing…");
+    });
     rolling.start(repo);
 
     ctx.ui.setStatus(
@@ -166,10 +169,9 @@ export default function (pi: ExtensionAPI): void {
   });
 
   // -------------------------------------------------------------------------
-  // turn_end — refresh the advisory lock so we keep writer status alive
+  // turn_end — update the navigator status widget with the latest coverage
   // -------------------------------------------------------------------------
   pi.on("turn_end", async (_event, ctx) => {
-    rolling?.refreshLock();
     // Update the status widget with latest coverage if available.
     const cov = rolling?.coverage;
     if (cov && rolling?.isWriter && ctx?.ui) {

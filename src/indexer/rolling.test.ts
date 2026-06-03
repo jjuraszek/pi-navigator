@@ -118,3 +118,138 @@ test("worker crash: workerFailed=true and lock released for next acquirer", () =
   assert.equal(b.isWriter, true, "second indexer must acquire lock after crash");
   b.stop();
 });
+
+// Helper: invoke the private heartbeat deterministically.
+function tick(idx: RollingIndexer): void {
+  (idx as unknown as { _heartbeat(): void })._heartbeat();
+}
+const SLOW = { heartbeatMs: 3_600_000 };
+
+test("read-only session promotes on the next heartbeat once the lock frees", () => {
+  const repo = fakeRepo();
+  let lockFree = false;
+  const stubAcquire = ((p: string, ttl: number) =>
+    lockFree ? ({ path: p, refresh() {}, release() { lockFree = false; } }) : null) as typeof acquire;
+  let spawned = 0;
+  let promoted = 0;
+  const idx = new RollingIndexer(DEFAULT_CONFIG, () => { spawned++; return fakeSpawn().fn(); }, {
+    acquire: stubAcquire,
+    ...SLOW,
+  });
+  idx.onPromote(() => { promoted++; });
+  idx.start(repo);
+  assert.equal(idx.isWriter, false, "boots read-only while lock held");
+  assert.equal(spawned, 0);
+
+  tick(idx); // still held
+  assert.equal(idx.isWriter, false);
+
+  lockFree = true;
+  tick(idx); // promote
+  assert.equal(idx.isWriter, true, "promoted after lock freed");
+  assert.equal(spawned, 1, "worker spawned exactly once on promotion");
+  assert.equal(promoted, 1, "onPromote fired exactly once");
+  idx.stop();
+});
+
+test("writer heartbeat refreshes the lock", () => {
+  const repo = fakeRepo();
+  let refreshed = 0;
+  const handle = { path: "x", refresh() { refreshed++; }, release() {} };
+  const stubAcquire = (() => handle) as unknown as typeof acquire;
+  const idx = new RollingIndexer(DEFAULT_CONFIG, () => fakeSpawn().fn(), { acquire: stubAcquire, ...SLOW });
+  idx.start(repo);
+  assert.equal(idx.isWriter, true);
+  tick(idx);
+  tick(idx);
+  assert.equal(refreshed, 2, "each writer heartbeat refreshes the held lock");
+  idx.stop();
+});
+
+test("worker crash drops writer + nulls worker, then heartbeat respawns", () => {
+  const repo = fakeRepo();
+  let errorCb: ((e: Error) => void) | undefined;
+  let messageCb: ((msg: unknown) => void) | undefined;
+  function crashableSpawn(): WorkerLike {
+    return {
+      postMessage: () => {},
+      terminate: () => {},
+      on: (event, cb) => {
+        if (event === "error") errorCb = cb as (e: Error) => void;
+        if (event === "message") messageCb = cb as (msg: unknown) => void;
+      },
+    };
+  }
+  let lockHandedOut = true;
+  const stubAcquire = ((p: string) =>
+    lockHandedOut ? ({ path: p, refresh() {}, release() { } }) : null) as typeof acquire;
+  let spawned = 0;
+  const idx = new RollingIndexer(DEFAULT_CONFIG, () => { spawned++; return crashableSpawn(); }, {
+    acquire: stubAcquire,
+    ...SLOW,
+  });
+  idx.start(repo);
+  assert.equal(idx.isWriter, true);
+  assert.equal(spawned, 1);
+
+  // Deliver a coverage message before the crash so _coverage is populated.
+  assert.ok(messageCb, "message handler wired");
+  const preCrashCoverage = { total: 10, indexed: 7, fullCrawlDone: false, headBehind: 0 };
+  messageCb!({ type: "coverage", coverage: preCrashCoverage });
+  assert.deepEqual(idx.coverage, preCrashCoverage, "coverage captured before crash");
+
+  assert.ok(errorCb, "error handler wired");
+  errorCb!(new Error("boom"));
+  assert.equal(idx.isWriter, false, "crash drops writer");
+  assert.equal(idx.workerFailed, true);
+
+  // _coverage must be retained as last-known-good across the crash.
+  assert.deepEqual(idx.coverage, preCrashCoverage, "coverage retained as last-known-good after crash");
+
+  tick(idx); // lock still acquirable → respawn
+  assert.equal(idx.isWriter, true, "heartbeat re-acquires after crash");
+  assert.equal(spawned, 2, "worker respawned");
+  assert.equal(idx.workerFailed, false, "workerFailed clears on recovery");
+  idx.stop();
+});
+
+test("synchronous spawn throw in start() rolls back isWriter and still arms heartbeat", () => {
+  const repo = fakeRepo();
+  const throwingSpawn = () => { throw new Error("spawn boom"); };
+  const idx = new RollingIndexer(DEFAULT_CONFIG, throwingSpawn as any, SLOW);
+  idx.start(repo);
+  assert.equal(idx.isWriter, false, "spawn throw must roll back isWriter");
+  assert.equal(idx.workerFailed, true, "workerFailed set after synchronous throw");
+  // Heartbeat timer must be armed: tick() must not throw even though spawn always fails.
+  assert.doesNotThrow(() => tick(idx));
+  idx.stop();
+});
+
+test("concurrent promotion: only one of two read-only sessions wins", () => {
+  const repo = fakeRepo();
+  let granted = false;
+  const stubAcquire = ((p: string) => {
+    if (granted) return null;
+    granted = true;
+    return { path: p, refresh() {}, release() {} };
+  }) as typeof acquire;
+  const mk = () => new RollingIndexer(DEFAULT_CONFIG, () => fakeSpawn().fn(), { acquire: stubAcquire, ...SLOW });
+  // Both boot read-only: first start grabs the single grant, so flip order —
+  // force both to start while the lock is "held" by pre-granting once.
+  granted = true;
+  const a = mk(); a.start(repo);
+  const b = mk(); b.start(repo);
+  assert.equal(a.isWriter, false);
+  assert.equal(b.isWriter, false);
+
+  granted = false; // lock frees: exactly one grant available
+  let promotedA = 0, promotedB = 0;
+  a.onPromote(() => { promotedA++; });
+  b.onPromote(() => { promotedB++; });
+  tick(a);
+  tick(b);
+  assert.equal(promotedA + promotedB, 1, "exactly one session promotes");
+  assert.equal(a.isWriter !== b.isWriter, true, "single-writer invariant holds");
+  a.stop();
+  b.stop();
+});
