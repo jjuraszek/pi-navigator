@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.6.1] - 2026-06-04
+
 ### Fixed
 - **Telemetry attribution across batched locates.** The correlator kept a single
   `lastLocate` slot, so when multiple `navigator_locate` calls fired before their
