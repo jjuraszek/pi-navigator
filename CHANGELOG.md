@@ -4,6 +4,44 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Fixed
+- **Telemetry attribution correctness.** Dogfooding v0.5.0 surfaced correlation
+  bugs that the synthetic unit tests could not catch; this corrects the
+  capture → outcome → judge pipeline end-to-end.
+  - **Search detection:** `detect.ts` now splits a bash command into shell
+    segments (quote-aware, on unquoted `&&`/`||`/`;`/`|`/newline) and matches
+    search tools per segment, so `cd repo && rg foo` and piped searches are
+    detected. Trailing shell punctuation is trimmed from the captured pattern.
+  - **Outcome model:** strict precedence `hit > cluster-assist > miss-fallback
+    > abandoned`. `miss-fallback` is now **search-gated** — an unrelated
+    file read no longer mislabels a locate as a fallback. A re-search must
+    occur for a fallback to register.
+  - **Asymmetric attribution windows:** `FULL_WINDOW_TURNS = 10` for
+    hit/cluster-assist; `FALLBACK_WINDOW_TURNS = 3` for search-driven
+    fallback, so a late unrelated search no longer steals attribution.
+
+### Added
+- **`cluster-assist` outcome + `assist_rate` metric.** Consuming a co-change or
+  referrer **cluster** path (surfaced by the locate but not in the ranked
+  results) is now first-class: it records `nav_consume.cluster_kind`, resolves
+  to a `cluster-assist` outcome, and is reported as `assist_rate` in
+  `/navigator stats`. Ranked-only `hit_rate`/`mrr`/`hit@k` are unchanged.
+- **Reachable ranking-gap verdict.** `scripts/export-cases.ts` resolves a
+  miss-fallback's target from the first read/slice after the triggering search
+  and emits the previously-unreachable `indexed` verdict when that target was
+  surfaced in the cluster but not ranked — the actionable signal for `rank.ts`
+  tuning. `cluster-assist` cases export the same verdict.
+- **Golden-trace + invariant test layer.** A `replayTrace` harness drives the
+  real correlator from ordered tool-event fixtures (one per regression class);
+  a seeded property suite asserts the outcome partition, precedence,
+  ranked-wins classification, fallback-window edges, and rate ranges.
+
+### Changed
+- **Telemetry schema → v2.** `nav_consume` gains `cluster_kind`
+  (`NULL`|`cochange`|`referrer`) with a `CHECK` enforcing mutual exclusion with
+  `locate_rank`. Telemetry is disposable dev-only data: the version bump drops
+  and rebuilds the telemetry DB — no migration.
+
 ## [v0.5.0] - 2026-06-04
 
 ### Added

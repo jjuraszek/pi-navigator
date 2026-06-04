@@ -1,13 +1,13 @@
 import type { QueryType, SearchTool } from "./types.ts";
 
 const TOOL_PATTERNS: { tool: SearchTool; re: RegExp }[] = [
-  { tool: "git-grep", re: /(?:^|\|)\s*git\s+grep\s+(.+)$/ },
-  { tool: "rg", re: /(?:^|\|)\s*rg\s+(.+)$/ },
-  { tool: "grep", re: /(?:^|\|)\s*(?:e|f)?grep\s+(.+)$/ },
-  { tool: "fd", re: /(?:^|\|)\s*fd(?:find)?\s+(.+)$/ },
-  { tool: "ag", re: /(?:^|\|)\s*ag\s+(.+)$/ },
-  { tool: "ack", re: /(?:^|\|)\s*ack\s+(.+)$/ },
-  { tool: "find", re: /(?:^|\|)\s*find\s+(.+)$/ },
+  { tool: "git-grep", re: /^\s*git\s+grep\s+(.+)$/ },
+  { tool: "rg", re: /^\s*rg\s+(.+)$/ },
+  { tool: "grep", re: /^\s*(?:e|f)?grep\s+(.+)$/ },
+  { tool: "fd", re: /^\s*fd(?:find)?\s+(.+)$/ },
+  { tool: "ag", re: /^\s*ag\s+(.+)$/ },
+  { tool: "ack", re: /^\s*ack\s+(.+)$/ },
+  { tool: "find", re: /^\s*find\s+(.+)$/ },
 ];
 
 function unquote(t: string): string {
@@ -29,12 +29,80 @@ function extractPattern(tool: SearchTool, rest: string): string | null {
   return null;
 }
 
+/**
+ * Split a shell command string into segments on unquoted &&, ||, ;, |, newlines.
+ * Quoted regions (single or double quotes) are treated as opaque.
+ * $(...) and heredocs are best-effort/opaque.
+ */
+function splitSegments(command: string): string[] {
+  const segments: string[] = [];
+  let seg = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+
+  while (i < command.length) {
+    const ch = command[i];
+
+    if (inSingle) {
+      seg += ch;
+      if (ch === "'") inSingle = false;
+      i++;
+      continue;
+    }
+
+    if (inDouble) {
+      seg += ch;
+      if (ch === '"') inDouble = false;
+      i++;
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      seg += ch;
+      i++;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDouble = true;
+      seg += ch;
+      i++;
+      continue;
+    }
+
+    // Check two-char operators before single-char |
+    if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
+      segments.push(seg);
+      seg = "";
+      i += 2;
+      continue;
+    }
+
+    if (ch === ";" || ch === "|" || ch === "\n") {
+      segments.push(seg);
+      seg = "";
+      i++;
+      continue;
+    }
+
+    seg += ch;
+    i++;
+  }
+
+  if (seg.length > 0) segments.push(seg);
+  return segments;
+}
+
 export function detectSearch(command: string): { tool: SearchTool; pattern: string } | null {
-  for (const { tool, re } of TOOL_PATTERNS) {
-    const m = command.match(re);
-    if (m) {
-      const pattern = extractPattern(tool, m[1]);
-      if (pattern !== null) return { tool, pattern };
+  for (const segment of splitSegments(command)) {
+    for (const { tool, re } of TOOL_PATTERNS) {
+      const m = segment.match(re);
+      if (m) {
+        const pattern = extractPattern(tool, m[1]);
+        if (pattern !== null) return { tool, pattern };
+      }
     }
   }
   return null;

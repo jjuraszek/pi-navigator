@@ -36,6 +36,7 @@ export function formatStats(label: string, s: StatsSummary): string {
     `navigator stats [${label}]`,
     `  locate_total              ${s.locateTotal}`,
     `  hit_rate                  ${pct(s.hitRate)}`,
+    `  assist_rate               ${pct(s.assistRate)}`,
     `  mrr                       ${s.mrr.toFixed(3)}`,
     `  hit@1                     ${pct(s.hitAt1)}`,
     `  hit@3                     ${pct(s.hitAt3)}`,

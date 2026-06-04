@@ -12,6 +12,13 @@ test("detectSearch recognizes search tools and extracts the pattern", () => {
   assert.deepEqual(detectSearch("ag pattern"), { tool: "ag", pattern: "pattern" });
   assert.deepEqual(detectSearch("ack thing"), { tool: "ack", pattern: "thing" });
 });
+test("detectSearch detects search in compound/piped commands", () => {
+  assert.deepEqual(detectSearch("cd ~/repo && rg -i prune --type ts"), { tool: "rg", pattern: "prune" });
+  assert.deepEqual(detectSearch("ls | grep -v telemetry | head -1"), { tool: "grep", pattern: "telemetry" });
+  assert.deepEqual(detectSearch("rg navigator; echo done"), { tool: "rg", pattern: "navigator" });
+  assert.deepEqual(detectSearch("rg 'a && b'"), { tool: "rg", pattern: "a && b" });
+  assert.deepEqual(detectSearch("cd x && rg foo && rg bar"), { tool: "rg", pattern: "foo" });
+});
 test("detectSearch returns null for non-search bash", () => {
   assert.equal(detectSearch("curl -H 'Authorization: x' https://h"), null);
   assert.equal(detectSearch("psql -c 'select 1'"), null);

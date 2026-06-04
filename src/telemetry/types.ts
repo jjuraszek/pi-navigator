@@ -1,4 +1,4 @@
-export type Outcome = "hit" | "miss-fallback" | "abandoned";
+export type Outcome = "hit" | "miss-fallback" | "abandoned" | "cluster-assist";
 export type ConsumeKind = "slice" | "read" | "search";
 export type UnavailableReason = "non_git" | "disabled" | "booting";
 export type QueryType = "identifier" | "keyword" | "open-ended";
@@ -22,6 +22,7 @@ export interface ConsumeRowInput {
   path: string | null; locateRank: number | null; staleIndex: boolean | null;
   unchanged: boolean | null; searchTool: SearchTool | null; searchPattern: string | null;
   latencyMs: number | null; isError: boolean;
+  clusterKind: "cochange" | "referrer" | null;
 }
 export interface UnavailableRowInput {
   sessionId: string; seq: number; turn: number; ts: number;
@@ -32,7 +33,7 @@ export interface LocateOutcome {
   outcome: Outcome; justifiedFallback: boolean; consumedRank: number | null; turnsToConsume: number | null;
 }
 export interface StatsSummary {
-  scope: string; locateTotal: number; hitRate: number; missFallback: number;
+  scope: string; locateTotal: number; hitRate: number; assistRate: number; missFallback: number;
   missFallbackUnjustified: number; abandoned: number; zeroResultLocates: number;
   fallbackSearches: number; unavailableByReason: Record<string, number>;
   sessionsTotal: number; sessionsWithLocate: number; bypassSessionRate: number;

@@ -63,6 +63,7 @@ function makeStats(overrides: Partial<StatsSummary> = {}): StatsSummary {
     scope: "session",
     locateTotal: 4,
     hitRate: 0.5,
+    assistRate: 0,
     missFallback: 1,
     missFallbackUnjustified: 0,
     abandoned: 1,

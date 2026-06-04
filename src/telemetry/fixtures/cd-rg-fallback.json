@@ -1,0 +1,26 @@
+[
+  {
+    "turn": 0,
+    "toolName": "navigator_locate",
+    "args": { "query": "find foo" },
+    "result": {
+      "details": {
+        "results": [
+          { "path": "src/foo.ts", "score": 5, "signals": { "fts": 1, "path": 0, "symbol": 0, "recency": 0 } }
+        ],
+        "cluster": null,
+        "index": { "coverage": 1, "dirty": false, "head_behind": 0, "fresh": true },
+        "confidence": "high",
+        "has_exact_def": false,
+        "used_or_fallback": false,
+        "top_has_anchor": true
+      }
+    }
+  },
+  {
+    "turn": 1,
+    "toolName": "bash",
+    "args": { "command": "cd repo && rg foo" },
+    "result": { "content": "src/foo.ts:1:foo" }
+  }
+]

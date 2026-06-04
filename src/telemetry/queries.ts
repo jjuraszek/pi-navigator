@@ -68,8 +68,8 @@ export function insertConsume(db: Db, row: ConsumeRowInput): void {
     .prepare(
       `INSERT INTO nav_consume
          (session_id, seq, turn, ts, kind, path, locate_rank, stale_index,
-          unchanged, search_tool, search_pattern, latency_ms, is_error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          unchanged, search_tool, search_pattern, latency_ms, is_error, cluster_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.sessionId,
@@ -85,6 +85,7 @@ export function insertConsume(db: Db, row: ConsumeRowInput): void {
       row.searchPattern ?? null,
       row.latencyMs ?? null,
       b(row.isError),
+      row.clusterKind ?? null,
     );
 }
 

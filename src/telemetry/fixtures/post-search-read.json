@@ -1,0 +1,32 @@
+[
+  {
+    "turn": 0,
+    "toolName": "navigator_locate",
+    "args": { "query": "search then cluster" },
+    "result": {
+      "details": {
+        "results": [
+          { "path": "ranked.ts", "score": 8, "signals": { "fts": 1, "path": 0, "symbol": 0, "recency": 0 } }
+        ],
+        "cluster": { "cochange": ["post-search-p.ts"], "referrers": [] },
+        "index": { "coverage": 1, "dirty": false, "head_behind": 0, "fresh": true },
+        "confidence": "high",
+        "has_exact_def": false,
+        "used_or_fallback": false,
+        "top_has_anchor": true
+      }
+    }
+  },
+  {
+    "turn": 1,
+    "toolName": "bash",
+    "args": { "command": "rg foo" },
+    "result": { "content": "post-search-p.ts:3:foo" }
+  },
+  {
+    "turn": 2,
+    "toolName": "read",
+    "args": { "path": "post-search-p.ts" },
+    "result": { "content": "cluster path content" }
+  }
+]

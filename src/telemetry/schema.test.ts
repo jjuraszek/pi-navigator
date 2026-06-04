@@ -131,6 +131,51 @@ test("needsRebuild returns correct results", () => {
   assert.equal(needsRebuild(1, 3), true, "stored far behind current should trigger rebuild");
 });
 
+test("nav_consume has a cluster_kind column after migrate", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const db = openDb(dbPath);
+    migrate(db);
+
+    const cols = db
+      .prepare("PRAGMA table_info(nav_consume)")
+      .all() as Array<{ name: string }>;
+    const names = cols.map((c) => c.name);
+    assert.ok(names.includes("cluster_kind"), `cluster_kind column missing; got: ${names.join(", ")}`);
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
+test("nav_consume CHECK rejects row with both locate_rank and cluster_kind set", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const db = openDb(dbPath);
+    migrate(db);
+
+    // Insert a session first so FK/NOT NULL is satisfied
+    db.prepare(
+      "INSERT INTO nav_session (session_id, started_at) VALUES (?, ?)"
+    ).run("sess-check", Date.now());
+
+    assert.throws(
+      () => {
+        db.prepare(
+          `INSERT INTO nav_consume (session_id, seq, turn, ts, kind, locate_rank, cluster_kind)
+           VALUES ('sess-check', 1, 1, ${Date.now()}, 'slice', 1, 'cochange')`
+        ).run();
+      },
+      (err: unknown) => {
+        assert.ok(err instanceof Error, "expected an Error");
+        assert.match(err.message, /CHECK constraint failed/i);
+        return true;
+      },
+    );
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
 test("pruneOld removes orphaned nav_locate rows with no matching session", () => {
   const dbPath = makeTmpPath();
   try {

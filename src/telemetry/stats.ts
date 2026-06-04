@@ -1,6 +1,15 @@
 import type { Db } from "../store/db.ts";
 import type { LocateOutcome, StatsSummary } from "./types.ts";
 
+export const FULL_WINDOW_TURNS = 10;
+export const FALLBACK_WINDOW_TURNS = 3;
+
+export interface WindowOpts {
+  turnCap?: number;
+  fullWindowTurns?: number;
+  fallbackWindowTurns?: number;
+}
+
 // Raw DB row shapes used internally.
 interface LocateRow {
   id: number;
@@ -17,10 +26,11 @@ interface ConsumeRow {
   turn: number;
   kind: string;
   locate_rank: number | null;
+  cluster_kind: string | null;
 }
 
 interface OutcomeInternal extends LocateOutcome {
-  // consumes that fell inside this locate's attribution window
+  // consumes that fell inside this locate's full attribution window
   windowConsumes: ConsumeRow[];
 }
 
@@ -28,7 +38,10 @@ interface OutcomeInternal extends LocateOutcome {
 // Core derivation
 // ────────────────────────────────────────────────────────────────────────────
 
-function deriveInternal(db: Db, opts: { turnCap: number }): OutcomeInternal[] {
+function deriveInternal(db: Db, opts: WindowOpts): OutcomeInternal[] {
+  const fullWindowTurns = opts.fullWindowTurns ?? opts.turnCap ?? FULL_WINDOW_TURNS;
+  const fallbackWindowTurns = opts.fallbackWindowTurns ?? FALLBACK_WINDOW_TURNS;
+
   const locates = db
     .prepare(
       "SELECT id, session_id, seq, turn, result_count, confidence FROM nav_locate ORDER BY session_id, seq",
@@ -37,7 +50,7 @@ function deriveInternal(db: Db, opts: { turnCap: number }): OutcomeInternal[] {
 
   const consumes = db
     .prepare(
-      "SELECT session_id, seq, turn, kind, locate_rank FROM nav_consume ORDER BY session_id, seq",
+      "SELECT session_id, seq, turn, kind, locate_rank, cluster_kind FROM nav_consume ORDER BY session_id, seq",
     )
     .all() as unknown as ConsumeRow[];
 
@@ -72,35 +85,51 @@ function deriveInternal(db: Db, opts: { turnCap: number }): OutcomeInternal[] {
       const nextSeq =
         i + 1 < sessionLocates.length ? sessionLocates[i + 1].seq : Infinity;
 
-      const window = sessionConsumes.filter(
+      // Full window: all consumes between this locate and the next, within fullWindowTurns.
+      const fullWindow = sessionConsumes.filter(
         (c) =>
           c.seq > L.seq &&
           c.seq < nextSeq &&
-          c.turn <= L.turn + opts.turnCap,
+          c.turn <= L.turn + fullWindowTurns,
       );
 
-      // Hit: first slice/read with a non-null locate_rank
-      const hitCandidates = window.filter(
+      // Precedence: hit > cluster-assist > miss-fallback > abandoned.
+
+      const hitConsume = fullWindow.find(
         (c) => (c.kind === "slice" || c.kind === "read") && c.locate_rank !== null,
       );
+
+      // When no hit: compute fallbackSearch and assistRead independently, then apply ordering.
+      // A cluster-path read is only cluster-assist when it PRECEDES any fallback search.
+      // If a fallback search came first, the agent had already bailed on the locate → miss-fallback.
+      const fallbackSearch = !hitConsume
+        ? fullWindow.find(
+            (c) => c.kind === "search" && c.turn <= L.turn + fallbackWindowTurns,
+          )
+        : undefined;
+
+      const assistRead = !hitConsume
+        ? fullWindow.find(
+            (c) => (c.kind === "slice" || c.kind === "read") && c.cluster_kind !== null,
+          )
+        : undefined;
 
       let outcome: LocateOutcome["outcome"];
       let consumedRank: number | null = null;
       let turnsToConsume: number | null = null;
 
-      if (hitCandidates.length > 0) {
-        // window is already ordered by seq (ascending), so first = earliest
-        const earliest = hitCandidates[0];
+      if (hitConsume) {
         outcome = "hit";
-        consumedRank = earliest.locate_rank;
-        turnsToConsume = earliest.turn - L.turn;
+        consumedRank = hitConsume.locate_rank;
+        turnsToConsume = hitConsume.turn - L.turn;
+      } else if (assistRead && (!fallbackSearch || assistRead.seq < fallbackSearch.seq)) {
+        // cluster-assist only when the cluster read arrived before any fallback search
+        outcome = "cluster-assist";
+        turnsToConsume = assistRead.turn - L.turn;
+      } else if (fallbackSearch) {
+        outcome = "miss-fallback";
       } else {
-        const isMissFallback = window.some(
-          (c) =>
-            c.kind === "search" ||
-            ((c.kind === "slice" || c.kind === "read") && c.locate_rank === null),
-        );
-        outcome = isMissFallback ? "miss-fallback" : "abandoned";
+        outcome = "abandoned";
       }
 
       const justifiedFallback = L.confidence === "low" || L.result_count === 0;
@@ -114,7 +143,7 @@ function deriveInternal(db: Db, opts: { turnCap: number }): OutcomeInternal[] {
         justifiedFallback,
         consumedRank,
         turnsToConsume,
-        windowConsumes: window,
+        windowConsumes: fullWindow,
       });
     }
   }
@@ -126,30 +155,31 @@ function deriveInternal(db: Db, opts: { turnCap: number }): OutcomeInternal[] {
 // Public API
 // ────────────────────────────────────────────────────────────────────────────
 
-export function deriveLocateOutcomes(db: Db, opts: { turnCap: number }): LocateOutcome[] {
+export function deriveLocateOutcomes(db: Db, opts: WindowOpts): LocateOutcome[] {
   return deriveInternal(db, opts).map(
     ({ windowConsumes: _wc, ...rest }) => rest,
   );
 }
 
-export function aggregate(db: Db, opts: { turnCap: number; scope: string }): StatsSummary {
+export function aggregate(db: Db, opts: WindowOpts & { scope: string }): StatsSummary {
   const { scope } = opts;
   const all = deriveInternal(db, opts);
   const scoped = scope === "lifetime" ? all : all.filter((o) => o.sessionId === scope);
 
   const locateTotal = scoped.length;
   const hits = scoped.filter((o) => o.outcome === "hit");
+  const assists = scoped.filter((o) => o.outcome === "cluster-assist");
   const missFallbacks = scoped.filter((o) => o.outcome === "miss-fallback");
   const abandoneds = scoped.filter((o) => o.outcome === "abandoned");
 
   const hitRate = locateTotal > 0 ? hits.length / locateTotal : 0;
+  const assistRate = locateTotal > 0 ? assists.length / locateTotal : 0;
   const missFallback = missFallbacks.length;
   const missFallbackUnjustified = missFallbacks.filter((o) => !o.justifiedFallback).length;
   const abandoned = abandoneds.length;
   const zeroResultLocates = scoped.filter((o) => o.resultCount === 0).length;
 
   // Spec MRR: mean of (1/consumedRank) over HITS only.
-  // Denominator = hits.length so MRR stays orthogonal to hitRate.
   const mrr =
     hits.length > 0
       ? hits.reduce((s, o) => s + 1 / o.consumedRank!, 0) / hits.length
@@ -253,6 +283,7 @@ export function aggregate(db: Db, opts: { turnCap: number; scope: string }): Sta
     scope,
     locateTotal,
     hitRate,
+    assistRate,
     missFallback,
     missFallbackUnjustified,
     abandoned,

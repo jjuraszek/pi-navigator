@@ -1,7 +1,7 @@
 import { openDb, type Db } from "../src/store/db.ts";
 import { migrate as migrateIndex } from "../src/store/schema.ts";
 import { getFileByPath } from "../src/store/queries.ts";
-import { deriveLocateOutcomes } from "../src/telemetry/stats.ts";
+import { deriveLocateOutcomes, FULL_WINDOW_TURNS } from "../src/telemetry/stats.ts";
 import { migrate as migrateTelemetry } from "../src/telemetry/schema.ts";
 import { telemetryPathFor } from "../src/telemetry/db.ts";
 import { isSecret } from "../src/indexer/walk.ts";
@@ -37,7 +37,7 @@ export interface ExportedCase {
     searchPattern: string | null;
   }>;
   indexWarmth: { coverage: number; fresh: boolean; dirty: boolean; headBehind: number };
-  fallbackVerdicts: Array<{ path: string; indexed: "indexed" | "not_indexed" | "indexed_not_returned" }>;
+  fallbackVerdicts: Array<{ path: string | null; indexed: "indexed" | "not_indexed" | "indexed_not_returned" }>;
 }
 
 // Internal row shapes matching the DB schema.
@@ -59,6 +59,8 @@ interface LocateRow {
   head_behind: number;
   fresh: number;
   results_metadata: string;
+  cochange: string | null;
+  referrers: string | null;
 }
 
 interface ConsumeRow {
@@ -74,23 +76,38 @@ interface ConsumeRow {
 
 function priorityRank(outcome: string, justifiedFallback: boolean, confidence: string): number {
   if (outcome === "miss-fallback" && !justifiedFallback) return 0;
-  if (outcome === "miss-fallback" && justifiedFallback) return 1;
-  if (outcome === "abandoned") return 2;
-  if (confidence === "low") return 3;
-  return 4; // hit or other
+  if (outcome === "cluster-assist") return 1;
+  if (outcome === "miss-fallback" && justifiedFallback) return 2;
+  if (outcome === "abandoned") return 3;
+  if (confidence === "low") return 4;
+  return 5;
+}
+
+// Parse a JSON column that should be a string array; returns empty set on any error.
+function parseStringSet(json: string | null): Set<string> {
+  if (json == null) return new Set();
+  try {
+    const parsed = JSON.parse(json);
+    if (!Array.isArray(parsed)) return new Set();
+    const out = new Set<string>();
+    for (const v of parsed) {
+      if (typeof v === "string") out.add(v);
+    }
+    return out;
+  } catch {
+    return new Set();
+  }
 }
 
 export function exportCases(telemetryDb: Db, indexDb: Db, opts: ExportOpts): ExportedCase[] {
-  const TURN_CAP = 10;
-
-  const outcomeList = deriveLocateOutcomes(telemetryDb, { turnCap: TURN_CAP });
+  const outcomeList = deriveLocateOutcomes(telemetryDb, { turnCap: FULL_WINDOW_TURNS });
   const outcomeMap = new Map(outcomeList.map((o) => [o.locateId, o]));
 
   const locates = telemetryDb
     .prepare(
       `SELECT id, session_id, seq, turn, query, query_token_count, query_type,
               result_count, confidence, has_exact_def, used_or_fallback, top_has_anchor,
-              coverage, dirty, head_behind, fresh, results_metadata
+              coverage, dirty, head_behind, fresh, results_metadata, cochange, referrers
        FROM nav_locate ORDER BY session_id, seq`,
     )
     .all() as unknown as LocateRow[];
@@ -131,7 +148,7 @@ export function exportCases(telemetryDb: Db, indexDb: Db, opts: ExportOpts): Exp
 
     const sessionConsumes = consumesBySession.get(l.session_id) ?? [];
     const window = sessionConsumes.filter(
-      (c) => c.seq > l.seq && c.seq < nextSeq && c.turn <= l.turn + TURN_CAP,
+      (c) => c.seq > l.seq && c.seq < nextSeq && c.turn <= l.turn + FULL_WINDOW_TURNS,
     );
 
     // Parse results_metadata JSON; fall back to empty array on any parse error.
@@ -148,32 +165,37 @@ export function exportCases(telemetryDb: Db, indexDb: Db, opts: ExportOpts): Exp
     // Redact secret paths from resultsMetadata.
     resultsMetadata = resultsMetadata.filter((r) => !isSecret(r.path));
 
-    const resultPathSet = new Set(resultsMetadata.map((r) => r.path));
+    // Cluster paths surfaced by this locate (cochange + referrers).
+    const cochangePaths = parseStringSet(l.cochange);
+    const referrerPaths = parseStringSet(l.referrers);
+    const clusterPaths = new Set([...cochangePaths, ...referrerPaths]);
 
-    // Collect fallback paths: slice/read with locate_rank=null, or search with a path.
-    const fallbackPaths = new Set<string>();
-    for (const c of window) {
-      if ((c.kind === "slice" || c.kind === "read") && c.locate_rank === null && c.path) {
-        fallbackPaths.add(c.path);
-      } else if (c.kind === "search" && c.path) {
-        fallbackPaths.add(c.path);
+    // Derive fallback target and verdict based on outcome.
+    //
+    // miss-fallback: first search in window → first read/slice at or after that search with a path.
+    // cluster-assist: first read/slice in window whose path is in clusterPaths.
+    // All other outcomes: no fallback target.
+    const fallbackVerdicts: Array<{ path: string | null; indexed: "indexed" | "not_indexed" | "indexed_not_returned" }> = [];
+
+    if (outcomeInfo.outcome === "miss-fallback") {
+      const firstSearch = window.find((c) => c.kind === "search");
+      let target: string | null = null;
+      if (firstSearch) {
+        const firstReadAfter = window.find(
+          (c) =>
+            (c.kind === "slice" || c.kind === "read") &&
+            c.seq > firstSearch.seq &&
+            c.path !== null,
+        );
+        target = firstReadAfter?.path ?? null;
       }
-    }
-
-    // Derive indexed/not_indexed/indexed_not_returned verdict per fallback path.
-    const fallbackVerdicts: Array<{
-      path: string;
-      indexed: "indexed" | "not_indexed" | "indexed_not_returned";
-    }> = [];
-    for (const p of fallbackPaths) {
-      if (isSecret(p)) continue;
-      const rec = getFileByPath(indexDb, p);
-      if (!rec) {
-        fallbackVerdicts.push({ path: p, indexed: "not_indexed" });
-      } else if (!resultPathSet.has(p)) {
-        fallbackVerdicts.push({ path: p, indexed: "indexed_not_returned" });
-      } else {
-        fallbackVerdicts.push({ path: p, indexed: "indexed" });
+      fallbackVerdicts.push(verdictFor(target, clusterPaths, indexDb));
+    } else if (outcomeInfo.outcome === "cluster-assist") {
+      const clusterRead = window.find(
+        (c) => (c.kind === "slice" || c.kind === "read") && c.path !== null && clusterPaths.has(c.path!),
+      );
+      if (clusterRead?.path != null) {
+        fallbackVerdicts.push(verdictFor(clusterRead.path, clusterPaths, indexDb));
       }
     }
 
@@ -214,7 +236,8 @@ export function exportCases(telemetryDb: Db, indexDb: Db, opts: ExportOpts): Exp
     });
   }
 
-  // Sort: unjustified miss-fallback first, justified miss-fallback, abandoned, low-conf, hits.
+  // Sort: unjustified miss-fallback first, cluster-assist, justified miss-fallback,
+  // abandoned, low-conf, hits.
   cases.sort((a, b) => {
     const pa = priorityRank(a.outcome, a.justifiedFallback, a.confidence);
     const pb = priorityRank(b.outcome, b.justifiedFallback, b.confidence);
@@ -229,6 +252,24 @@ export function exportCases(telemetryDb: Db, indexDb: Db, opts: ExportOpts): Exp
   if (opts.queryType) result = result.filter((c) => c.queryType === opts.queryType);
   const limit = opts.limit ?? 50;
   return result.slice(0, limit);
+}
+
+// Compute a single fallback verdict for a target path.
+// p === null → no usable read was found → not_indexed (signal: gap in coverage).
+// p in clusterPaths → navigator surfaced it but ranked it out of main results → indexed (ranking gap).
+// p in index but not cluster → indexed_not_returned.
+// p absent from index → not_indexed.
+function verdictFor(
+  p: string | null,
+  clusterPaths: Set<string>,
+  indexDb: Db,
+): { path: string | null; indexed: "indexed" | "not_indexed" | "indexed_not_returned" } {
+  if (p === null) return { path: null, indexed: "not_indexed" };
+  if (isSecret(p)) return { path: null, indexed: "not_indexed" };
+  if (clusterPaths.has(p)) return { path: p, indexed: "indexed" };
+  const rec = getFileByPath(indexDb, p);
+  if (rec) return { path: p, indexed: "indexed_not_returned" };
+  return { path: p, indexed: "not_indexed" };
 }
 
 // CLI entry point — only executes when run directly, not when imported by tests.

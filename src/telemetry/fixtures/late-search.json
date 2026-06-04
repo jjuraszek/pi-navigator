@@ -1,0 +1,26 @@
+[
+  {
+    "turn": 0,
+    "toolName": "navigator_locate",
+    "args": { "query": "late search test" },
+    "result": {
+      "details": {
+        "results": [
+          { "path": "a.ts", "score": 5, "signals": { "fts": 1, "path": 0, "symbol": 0, "recency": 0 } }
+        ],
+        "cluster": null,
+        "index": { "coverage": 1, "dirty": false, "head_behind": 0, "fresh": true },
+        "confidence": "high",
+        "has_exact_def": false,
+        "used_or_fallback": false,
+        "top_has_anchor": true
+      }
+    }
+  },
+  {
+    "turn": 5,
+    "toolName": "bash",
+    "args": { "command": "rg foo" },
+    "result": { "content": "a.ts:1:foo" }
+  }
+]

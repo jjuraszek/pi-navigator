@@ -17,7 +17,7 @@ This skill is **read-only analysis** — it never reads source file contents, on
 |---|---|---|
 | **Ranking-position quality** | `resultsMetadata[].{path,score,signals:{fts,path,symbol,recency}}` + `consumptions[].locateRank` | Identify which signal dominated each result (largest component in `signals`). Aggregate per-signal rank lift. Feed into `rank.ts` weight input. |
 | **Confidence-flag calibration** | Aggregate `outcome` by `confidence` → low_conf_precision / high_conf_precision. Raw inputs: `confidenceInputs.{hasExactDef, usedOrFallback, topHasAnchor}` | Compare precision at low vs high confidence; find which raw input(s) best predict a useful outcome. |
-| **Recall gap vs ranking gap** | `fallbackVerdicts[].{path, indexed}` verdict + `outcome` | `not_indexed` → recall gap (file not in index). `indexed_not_returned` → retrieval gap (indexed but BM25 missed it). `indexed` + consumed rank worse than an unused higher result → ranking gap. All verdicts are **proven** from the index join, not inferred. |
+| **Recall gap vs ranking gap** | `fallbackVerdicts[].{path, indexed}` verdict + `outcome` | `not_indexed` → recall gap (file not in index). `indexed_not_returned` → retrieval gap (indexed but not in this locate's results or cluster). `indexed` → ranking gap (target was surfaced in the locate's co-change/referrer **cluster** but not in the ranked results — also the verdict emitted for every `cluster-assist` outcome). All verdicts are **proven** from the index join, not inferred. |
 | **Bypass rate** | `bypass_session_rate` (from `/navigator stats`) | Fraction of sessions that never called `navigator_locate` at all. A high rate means the agent is not reaching for the tool — an adoption signal, not a ranking failure. |
 
 #### Defers (named, not dropped)
@@ -54,7 +54,7 @@ This skill is **read-only analysis** — it never reads source file contents, on
    |---|---|
    | **recall** | `fallbackVerdicts` contains the consumed path with `indexed: "not_indexed"` |
    | **retrieval** | `fallbackVerdicts` contains the consumed path with `indexed: "indexed_not_returned"` |
-   | **ranking** | Path is `indexed`, was returned, but consumed at a rank worse than an unused result with higher score |
+   | **ranking** | `fallbackVerdicts` entry has `indexed: "indexed"` (target surfaced in the locate's co-change/referrer cluster but not ranked), or the `outcome` is `cluster-assist` |
    | **justified-fallback** | `justifiedFallback: true` — agent correctly bypassed locate |
    | **low-confidence** | Ambiguous consumption (multiple consumed paths, mixed signals) — flag, do not classify |
 

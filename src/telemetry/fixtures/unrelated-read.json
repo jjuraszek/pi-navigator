@@ -1,0 +1,26 @@
+[
+  {
+    "turn": 0,
+    "toolName": "navigator_locate",
+    "args": { "query": "find ranked" },
+    "result": {
+      "details": {
+        "results": [
+          { "path": "ranked.ts", "score": 9, "signals": { "fts": 1, "path": 0, "symbol": 2, "recency": 0 } }
+        ],
+        "cluster": null,
+        "index": { "coverage": 1, "dirty": false, "head_behind": 0, "fresh": true },
+        "confidence": "high",
+        "has_exact_def": true,
+        "used_or_fallback": false,
+        "top_has_anchor": true
+      }
+    }
+  },
+  {
+    "turn": 1,
+    "toolName": "read",
+    "args": { "path": "unrelated.ts" },
+    "result": { "content": "unrelated file content" }
+  }
+]

@@ -285,6 +285,95 @@ test("storeQueries=false: query is null, query_token_count populated", () => {
   }
 });
 
+test("locate→read of cochange cluster path: cluster_kind='cochange', locate_rank=null", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const opts = makeOpts(dbPath);
+    const { db, dbPath: _p, ...corrOpts } = opts;
+    const c = new TelemetryCorrelator({ ...corrOpts, db });
+
+    // Locate returns a.ts + b.ts as ranked results; rolling.ts is only in the cochange cluster
+    const locateDetails = makeLocateDetails(
+      [
+        { path: "a.ts", score: 9, signals: { fts: 1, path: 0, symbol: 2, recency: 0 } },
+        { path: "b.ts", score: 5, signals: { fts: 1, path: 0, symbol: 0, recency: 0 } },
+      ],
+      { cluster: { cochange: ["src/rolling.ts"], referrers: [] } },
+    );
+
+    c.onToolStart(startEv("l1", "navigator_locate", { query: "rolling" }));
+    c.onToolEnd({ toolCallId: "l1", toolName: "navigator_locate", result: { details: locateDetails }, isError: false });
+
+    // Agent reads the cluster path
+    c.onToolStart(startEv("r1", "read", { path: ROOT + "/src/rolling.ts" }));
+    c.onToolEnd({ toolCallId: "r1", toolName: "read", result: { content: "file content" }, isError: false });
+
+    const row = db.prepare("SELECT * FROM nav_consume WHERE session_id = ?").get(corrOpts.sessionId) as any;
+    assert.ok(row, "nav_consume row should exist");
+    assert.equal(row.kind, "read");
+    assert.equal(row.path, "src/rolling.ts");
+    assert.equal(row.locate_rank, null, "cluster path must not have a locate_rank");
+    assert.equal(row.cluster_kind, "cochange", "cluster path must have cluster_kind=cochange");
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
+test("locate→read of referrer cluster path: cluster_kind='referrer', locate_rank=null", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const opts = makeOpts(dbPath);
+    const { db, dbPath: _p, ...corrOpts } = opts;
+    const c = new TelemetryCorrelator({ ...corrOpts, db });
+
+    const locateDetails = makeLocateDetails(
+      [{ path: "a.ts", score: 9, signals: { fts: 1, path: 0, symbol: 2, recency: 0 } }],
+      { cluster: { cochange: [], referrers: ["src/referrer.ts"] } },
+    );
+
+    c.onToolStart(startEv("l1", "navigator_locate", { query: "ref" }));
+    c.onToolEnd({ toolCallId: "l1", toolName: "navigator_locate", result: { details: locateDetails }, isError: false });
+
+    c.onToolStart(startEv("r1", "read", { path: ROOT + "/src/referrer.ts" }));
+    c.onToolEnd({ toolCallId: "r1", toolName: "read", result: { content: "file content" }, isError: false });
+
+    const row = db.prepare("SELECT * FROM nav_consume WHERE session_id = ?").get(corrOpts.sessionId) as any;
+    assert.ok(row, "nav_consume row should exist");
+    assert.equal(row.locate_rank, null);
+    assert.equal(row.cluster_kind, "referrer");
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
+test("ranked path wins over cluster: locate_rank set, cluster_kind null", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const opts = makeOpts(dbPath);
+    const { db, dbPath: _p, ...corrOpts } = opts;
+    const c = new TelemetryCorrelator({ ...corrOpts, db });
+
+    // same path in ranked AND cochange — ranked wins
+    const locateDetails = makeLocateDetails(
+      [{ path: "a.ts", score: 9, signals: { fts: 1, path: 0, symbol: 2, recency: 0 } }],
+      { cluster: { cochange: ["a.ts"], referrers: [] } },
+    );
+
+    c.onToolStart(startEv("l1", "navigator_locate", { query: "a" }));
+    c.onToolEnd({ toolCallId: "l1", toolName: "navigator_locate", result: { details: locateDetails }, isError: false });
+
+    c.onToolStart(startEv("r1", "read", { path: ROOT + "/a.ts" }));
+    c.onToolEnd({ toolCallId: "r1", toolName: "read", result: { content: "file content" }, isError: false });
+
+    const row = db.prepare("SELECT * FROM nav_consume WHERE session_id = ?").get(corrOpts.sessionId) as any;
+    assert.ok(row);
+    assert.equal(row.locate_rank, 1, "ranked path must have locate_rank");
+    assert.equal(row.cluster_kind, null, "ranked path must not have cluster_kind");
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
 test("telemetry never throws after DB is closed: guard() swallows DB errors", () => {
   const dbPath = makeTmpPath();
   try {

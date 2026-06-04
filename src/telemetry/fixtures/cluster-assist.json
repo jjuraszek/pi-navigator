@@ -1,0 +1,26 @@
+[
+  {
+    "turn": 0,
+    "toolName": "navigator_locate",
+    "args": { "query": "rolling indexer" },
+    "result": {
+      "details": {
+        "results": [
+          { "path": "a.ts", "score": 8, "signals": { "fts": 1, "path": 0, "symbol": 1, "recency": 0 } }
+        ],
+        "cluster": { "cochange": ["src/cluster-p.ts"], "referrers": [] },
+        "index": { "coverage": 1, "dirty": false, "head_behind": 0, "fresh": true },
+        "confidence": "high",
+        "has_exact_def": false,
+        "used_or_fallback": false,
+        "top_has_anchor": true
+      }
+    }
+  },
+  {
+    "turn": 1,
+    "toolName": "read",
+    "args": { "path": "src/cluster-p.ts" },
+    "result": { "content": "cluster file content" }
+  }
+]

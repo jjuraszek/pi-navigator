@@ -11,7 +11,7 @@ import {
   insertConsume,
   markUsedLocate,
 } from "./queries.ts";
-import { deriveLocateOutcomes, aggregate } from "./stats.ts";
+import { deriveLocateOutcomes, aggregate, FULL_WINDOW_TURNS, FALLBACK_WINDOW_TURNS } from "./stats.ts";
 import type { Db } from "../store/db.ts";
 
 function makeTmpPath(): string {
@@ -61,11 +61,10 @@ const baseConsume = {
   searchPattern: null,
   latencyMs: null,
   isError: false,
+  clusterKind: null as "cochange" | "referrer" | null,
 };
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 1: hit + MRR + hit@k
-// ────────────────────────────────────────────────────────────────────────────
 test("hit: slice with locate_rank → outcome=hit, consumedRank, turnsToConsume", () => {
   const { db, path } = makeDb();
   try {
@@ -120,9 +119,7 @@ test("hit: slice with locate_rank → outcome=hit, consumedRank, turnsToConsume"
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 2: miss-fallback unjustified
-// ────────────────────────────────────────────────────────────────────────────
 test("miss-fallback unjustified: high-conf locate then search → justifiedFallback=false", () => {
   const { db, path } = makeDb();
   try {
@@ -171,9 +168,7 @@ test("miss-fallback unjustified: high-conf locate then search → justifiedFallb
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 3: justified fallback (low confidence)
-// ────────────────────────────────────────────────────────────────────────────
 test("justified fallback: low-conf locate then search → justifiedFallback=true", () => {
   const { db, path } = makeDb();
   try {
@@ -220,9 +215,7 @@ test("justified fallback: low-conf locate then search → justifiedFallback=true
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 4: abandoned
-// ────────────────────────────────────────────────────────────────────────────
 test("abandoned: locate with no subsequent consumes → outcome=abandoned", () => {
   const { db, path } = makeDb();
   try {
@@ -257,9 +250,7 @@ test("abandoned: locate with no subsequent consumes → outcome=abandoned", () =
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 5: turnCap boundary + next-locate boundary
-// ────────────────────────────────────────────────────────────────────────────
 test("turnCap boundary: at cap=hit; at cap+1=abandoned; past-next-locate=not attributed", () => {
   const { db, path } = makeDb();
   try {
@@ -364,8 +355,8 @@ test("turnCap boundary: at cap=hit; at cap+1=abandoned; past-next-locate=not att
 
     const o3 = deriveLocateOutcomes(db, { turnCap: 10 });
     assert.equal(o3.length, 2);
-    // L1: miss-fallback (seq=5 consume has no rank, seq=11 is past L2 seq=10)
-    assert.equal(o3[0].outcome, "miss-fallback", "consume past next-locate seq should not be attributed to L1");
+    // L1: abandoned — seq=5 is an unrelated read (no rank, no cluster_kind); seq=11 past nextSeq
+    assert.equal(o3[0].outcome, "abandoned", "unrelated read should not trigger miss-fallback");
     // L2: hit (seq=11 is in L2's window)
     assert.equal(o3[1].outcome, "hit", "consume after L2's seq should be attributed to L2");
   } finally {
@@ -373,9 +364,7 @@ test("turnCap boundary: at cap=hit; at cap+1=abandoned; past-next-locate=not att
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 6: low/high precision
-// ────────────────────────────────────────────────────────────────────────────
 test("low/high precision: mixed session", () => {
   const { db, path } = makeDb();
   try {
@@ -447,9 +436,7 @@ test("low/high precision: mixed session", () => {
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 7: bypass session rate
-// ────────────────────────────────────────────────────────────────────────────
 test("bypass: 2 sessions, one without locate → bypassSessionRate=0.5", () => {
   const { db, path } = makeDb();
   try {
@@ -480,9 +467,7 @@ test("bypass: 2 sessions, one without locate → bypassSessionRate=0.5", () => {
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 8: scope filter
-// ────────────────────────────────────────────────────────────────────────────
 test("scope: aggregate with session scope restricts to that session", () => {
   const { db, path } = makeDb();
   try {
@@ -546,9 +531,7 @@ test("scope: aggregate with session scope restricts to that session", () => {
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 9: staleSliceRate and unchangedReadsAvoided
-// ────────────────────────────────────────────────────────────────────────────
 test("staleSliceRate and unchangedReadsAvoided", () => {
   const { db, path } = makeDb();
   try {
@@ -601,9 +584,7 @@ test("staleSliceRate and unchangedReadsAvoided", () => {
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 10: zeroResultLocates
-// ────────────────────────────────────────────────────────────────────────────
 test("zeroResultLocates counted and justifiedFallback=true when result_count=0", () => {
   const { db, path } = makeDb();
   try {
@@ -645,9 +626,7 @@ test("zeroResultLocates counted and justifiedFallback=true when result_count=0",
   }
 });
 
-// ────────────────────────────────────────────────────────────────────────────
 // Test 11: MRR denominator is hits, not locateTotal
-// ────────────────────────────────────────────────────────────────────────────
 test("mrr denominator is hits not locateTotal: 1 hit at rank 2, 1 miss → mrr=0.5", () => {
   // Proves the spec definition: MRR = mean(1/consumedRank) over HITS only.
   // locateTotal=2, hits=1 at rank 2 → mrr must be (1/2)/1 = 0.5, not (1/2)/2 = 0.25.
@@ -702,6 +681,369 @@ test("mrr denominator is hits not locateTotal: 1 hit at rank 2, 1 miss → mrr=0
       Math.abs(summary.mrr - 0.5) < 1e-9,
       `mrr should be 0.5 (hits denominator), got ${summary.mrr}`,
     );
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("unrelated read with no search → outcome=abandoned (NOT miss-fallback)", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s12",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s12");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s12",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    // read with no rank and no cluster_kind → unrelated
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s12",
+      seq: 2,
+      turn: 1,
+      kind: "read",
+      locateRank: null,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 5 });
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].outcome, "abandoned", "unrelated read must not produce miss-fallback");
+
+    const summary = aggregate(db, { turnCap: 5, scope: "lifetime" });
+    assert.equal(summary.abandoned, 1);
+    assert.equal(summary.missFallback, 0);
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("cluster consume → outcome=cluster-assist, assistRate>0, hitRate unaffected", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s13",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s13");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s13",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s13",
+      seq: 2,
+      turn: 1,
+      ts: 1_000_001,
+      kind: "read",
+      path: "/foo.ts",
+      locateRank: null,
+      clusterKind: "cochange",
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 5 });
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0].outcome, "cluster-assist");
+    assert.equal(outcomes[0].consumedRank, null, "cluster-assist has no consumedRank");
+
+    const summary = aggregate(db, { turnCap: 5, scope: "lifetime" });
+    assert.equal(summary.hitRate, 0, "cluster-assist must not count as hit");
+    assert.ok(summary.assistRate > 0, `assistRate should be > 0, got ${summary.assistRate}`);
+    assert.ok(Math.abs(summary.assistRate - 1) < 1e-9, `assistRate should be 1, got ${summary.assistRate}`);
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("search at turn+2 (within FALLBACK_WINDOW_TURNS=3) → miss-fallback", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s14",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s14");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s14",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s14",
+      seq: 2,
+      turn: 2,
+      kind: "search",
+      locateRank: null,
+      path: null,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 10 });
+    assert.equal(outcomes[0].outcome, "miss-fallback", "search at turn+2 should be miss-fallback");
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("search at turn+5 (beyond FALLBACK_WINDOW_TURNS=3) → abandoned", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s15",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s15");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s15",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s15",
+      seq: 2,
+      turn: 5,
+      kind: "search",
+      locateRank: null,
+      path: null,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 10 });
+    assert.equal(outcomes[0].outcome, "abandoned", "search beyond FALLBACK_WINDOW_TURNS should be abandoned");
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("precedence: search before ranked read → outcome=hit (hit beats miss-fallback)", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s16",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s16");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s16",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    // search within fallback window
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s16",
+      seq: 2,
+      turn: 1,
+      kind: "search",
+      locateRank: null,
+      path: null,
+    });
+
+    // ranked read after search but still in full window
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s16",
+      seq: 3,
+      turn: 2,
+      kind: "read",
+      locateRank: 1,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 10 });
+    assert.equal(outcomes[0].outcome, "hit", "hit must take precedence over miss-fallback");
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("precedence: cluster read before search → outcome=cluster-assist", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s17",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s17");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s17",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s17",
+      seq: 2,
+      turn: 1,
+      ts: 1_000_001,
+      kind: "read",
+      path: "/foo.ts",
+      locateRank: null,
+      clusterKind: "referrer",
+    });
+
+    // search within fallback window
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s17",
+      seq: 3,
+      turn: 2,
+      kind: "search",
+      locateRank: null,
+      path: null,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 10 });
+    assert.equal(outcomes[0].outcome, "cluster-assist", "cluster-assist must beat miss-fallback");
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("constants: FULL_WINDOW_TURNS=10, FALLBACK_WINDOW_TURNS=3", () => {
+  assert.equal(FULL_WINDOW_TURNS, 10);
+  assert.equal(FALLBACK_WINDOW_TURNS, 3);
+});
+
+test("FALLBACK_WINDOW inclusive edge: search at turn=3 (L.turn=0, FALLBACK_WINDOW_TURNS=3) → miss-fallback", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s19",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s19");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s19",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s19",
+      seq: 2,
+      turn: 3,
+      kind: "search",
+      locateRank: null,
+      path: null,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 10 });
+    assert.equal(outcomes[0].outcome, "miss-fallback", "search at exactly FALLBACK_WINDOW_TURNS (inclusive <=) must be miss-fallback");
+
+    const summary = aggregate(db, { turnCap: 10, scope: "lifetime" });
+    assert.equal(summary.missFallback, 1);
+    assert.equal(summary.fallbackSearches, 1);
+  } finally {
+    cleanup(path);
+  }
+});
+
+test("FALLBACK_WINDOW exclusive beyond: search at turn=4 (L.turn=0, FALLBACK_WINDOW_TURNS=3) → abandoned", () => {
+  const { db, path } = makeDb();
+  try {
+    ensureSession(db, {
+      sessionId: "s20",
+      startedAt: 1_000_000,
+      repoRoot: "/r",
+      headSha: null,
+      isWriter: false,
+    });
+    markUsedLocate(db, "s20");
+
+    insertLocate(db, {
+      ...baseLocate,
+      sessionId: "s20",
+      seq: 1,
+      turn: 0,
+      ts: 1_000_000,
+      resultCount: 3,
+      confidence: "high",
+    });
+
+    insertConsume(db, {
+      ...baseConsume,
+      sessionId: "s20",
+      seq: 2,
+      turn: 4,
+      kind: "search",
+      locateRank: null,
+      path: null,
+    });
+
+    const outcomes = deriveLocateOutcomes(db, { turnCap: 10 });
+    assert.equal(outcomes[0].outcome, "abandoned", "search one beyond FALLBACK_WINDOW_TURNS must be abandoned");
+
+    const summary = aggregate(db, { turnCap: 10, scope: "lifetime" });
+    assert.equal(summary.abandoned, 1);
+    assert.equal(summary.missFallback, 0);
   } finally {
     cleanup(path);
   }

@@ -1,12 +1,12 @@
 import type { Db } from "../store/db.ts";
 
-export const TELEMETRY_SCHEMA_VERSION = 1;
+export const TELEMETRY_SCHEMA_VERSION = 2;
 
 export const DDL = `
 CREATE TABLE IF NOT EXISTS nav_session (session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, repo_root TEXT, head_sha TEXT, is_writer INTEGER DEFAULT 0, used_locate INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS nav_locate (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, turn INTEGER NOT NULL, ts INTEGER NOT NULL, head_sha TEXT, query TEXT, query_token_count INTEGER, query_type TEXT, limit_n INTEGER, result_count INTEGER, confidence TEXT, has_exact_def INTEGER, used_or_fallback INTEGER, top_has_anchor INTEGER, coverage REAL, dirty INTEGER, head_behind INTEGER, fresh INTEGER, latency_ms INTEGER, results_metadata TEXT, cochange TEXT, referrers TEXT);
 CREATE INDEX IF NOT EXISTS idx_locate_session_seq ON nav_locate(session_id, seq);
-CREATE TABLE IF NOT EXISTS nav_consume (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, turn INTEGER NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT, locate_rank INTEGER, stale_index INTEGER, unchanged INTEGER, search_tool TEXT, search_pattern TEXT, latency_ms INTEGER, is_error INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS nav_consume (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, turn INTEGER NOT NULL, ts INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT, locate_rank INTEGER, stale_index INTEGER, unchanged INTEGER, search_tool TEXT, search_pattern TEXT, latency_ms INTEGER, is_error INTEGER DEFAULT 0, cluster_kind TEXT, CHECK (locate_rank IS NULL OR cluster_kind IS NULL));
 CREATE INDEX IF NOT EXISTS idx_consume_session_seq ON nav_consume(session_id, seq);
 CREATE TABLE IF NOT EXISTS nav_unavailable (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, seq INTEGER NOT NULL, turn INTEGER NOT NULL, ts INTEGER NOT NULL, tool TEXT NOT NULL, reason TEXT NOT NULL);
 `;

@@ -11,6 +11,11 @@ import {
 import { classifyQuery, detectSearch } from "./detect.ts";
 import { toRepoRel } from "../paths.ts";
 
+interface LocateState {
+  ranked: string[];
+  cluster: Array<{ path: string; kind: "cochange" | "referrer" }>;
+}
+
 export interface CorrelatorOpts {
   db: Db;
   sessionId: string;
@@ -33,7 +38,7 @@ export class TelemetryCorrelator {
   private turn = 0;
   private readonly pendingStart = new Map<string, number>();
   private readonly pendingArgs = new Map<string, any>();
-  private lastLocate: ResultMeta[] | null = null;
+  private lastLocate: LocateState | null = null;
   private warned = false;
 
   constructor(o: CorrelatorOpts) {
@@ -101,10 +106,13 @@ export class TelemetryCorrelator {
     return Date.now() - start;
   }
 
-  private rankOf(path: string): number | null {
-    if (!this.lastLocate) return null;
-    const idx = this.lastLocate.findIndex((r) => r.path === path);
-    return idx === -1 ? null : idx + 1;
+  private classifyConsume(path: string): { rank: number | null; clusterKind: "cochange" | "referrer" | null } {
+    if (!this.lastLocate) return { rank: null, clusterKind: null };
+    const rankedIdx = this.lastLocate.ranked.findIndex((p) => p === path);
+    if (rankedIdx !== -1) return { rank: rankedIdx + 1, clusterKind: null };
+    const clusterEntry = this.lastLocate.cluster.find((e) => e.path === path);
+    if (clusterEntry) return { rank: null, clusterKind: clusterEntry.kind };
+    return { rank: null, clusterKind: null };
   }
 
   private mapReason(text: unknown): UnavailableReason {
@@ -178,7 +186,7 @@ export class TelemetryCorrelator {
       },
     }));
 
-    const cluster = details.cluster ?? null;
+    const clusterDetails = details.cluster ?? null;
 
     insertLocate(this.db, {
       sessionId: this.sessionId,
@@ -201,11 +209,15 @@ export class TelemetryCorrelator {
       fresh: details.index?.fresh ?? false,
       latencyMs: latencyMs ?? 0,
       resultsMetadata,
-      cochange: cluster?.cochange ?? [],
-      referrers: cluster?.referrers ?? [],
+      cochange: clusterDetails?.cochange ?? [],
+      referrers: clusterDetails?.referrers ?? [],
     });
 
-    this.lastLocate = resultsMetadata;
+    const clusterEntries: Array<{ path: string; kind: "cochange" | "referrer" }> = [
+      ...((clusterDetails?.cochange ?? []) as string[]).map((p: string) => ({ path: p, kind: "cochange" as const })),
+      ...((clusterDetails?.referrers ?? []) as string[]).map((p: string) => ({ path: p, kind: "referrer" as const })),
+    ];
+    this.lastLocate = { ranked: resultsMetadata.map((r) => r.path), cluster: clusterEntries };
   }
 
   private onSlice(ev: any, ts: number, latencyMs: number | null): void {
@@ -223,6 +235,7 @@ export class TelemetryCorrelator {
     }
 
     const rel = toRepoRel(this.root, details.path, this.sessionCwd);
+    const sliceClass = rel ? this.classifyConsume(rel) : { rank: null, clusterKind: null };
     insertConsume(this.db, {
       sessionId: this.sessionId,
       seq: this.nextSeq(),
@@ -230,7 +243,8 @@ export class TelemetryCorrelator {
       ts,
       kind: "slice",
       path: rel ?? null,
-      locateRank: rel ? this.rankOf(rel) : null,
+      locateRank: sliceClass.rank,
+      clusterKind: sliceClass.clusterKind,
       staleIndex: details.stale_index ?? null,
       unchanged: details.unchanged_since_last_read ?? null,
       searchTool: null,
@@ -245,6 +259,7 @@ export class TelemetryCorrelator {
     if (!rawPath) return;
     const rel = toRepoRel(this.root, rawPath, this.sessionCwd);
     if (rel === undefined) return;
+    const readClass = this.classifyConsume(rel);
     insertConsume(this.db, {
       sessionId: this.sessionId,
       seq: this.nextSeq(),
@@ -252,7 +267,8 @@ export class TelemetryCorrelator {
       ts,
       kind: "read",
       path: rel,
-      locateRank: this.rankOf(rel),
+      locateRank: readClass.rank,
+      clusterKind: readClass.clusterKind,
       staleIndex: null,
       unchanged: null,
       searchTool: null,
@@ -273,6 +289,7 @@ export class TelemetryCorrelator {
       kind: "search",
       path: null,
       locateRank: null,
+      clusterKind: null,
       staleIndex: null,
       unchanged: null,
       searchTool: d.tool,
@@ -291,6 +308,7 @@ export class TelemetryCorrelator {
       kind: "search",
       path: null,
       locateRank: null,
+      clusterKind: null,
       staleIndex: null,
       unchanged: null,
       searchTool: ev.toolName as SearchTool,

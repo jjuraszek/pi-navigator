@@ -1,0 +1,8 @@
+[
+  {
+    "turn": 0,
+    "toolName": "bash",
+    "args": { "command": "rg navigator; echo done" },
+    "result": { "content": "src/navigator/locate.ts:1:navigator" }
+  }
+]
