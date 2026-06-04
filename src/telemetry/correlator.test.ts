@@ -374,6 +374,75 @@ test("ranked path wins over cluster: locate_rank set, cluster_kind null", () => 
   }
 });
 
+test("two locates before any read: earlier locate's ranked/cluster files still attribute", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const opts = makeOpts(dbPath);
+    const { db, dbPath: _p, ...corrOpts } = opts;
+    const c = new TelemetryCorrelator({ ...corrOpts, db });
+
+    // Locate #1 (database query): ranked conn.ts + a cochange cluster file.
+    c.onToolStart(startEv("l1", "navigator_locate", { query: "db connection pooling" }));
+    c.onToolEnd({ toolCallId: "l1", toolName: "navigator_locate", result: { details: makeLocateDetails(
+      [{ path: "db/conn.ts", score: 9, signals: { fts: 1, path: 0, symbol: 2, recency: 0 } }],
+      { cluster: { cochange: ["db/model.ts"], referrers: [] } },
+    ) }, isError: false });
+
+    // Locate #2 (auth query) fires before any read — this used to clobber locate #1.
+    c.onToolStart(startEv("l2", "navigator_locate", { query: "auth middleware" }));
+    c.onToolEnd({ toolCallId: "l2", toolName: "navigator_locate", result: { details: makeLocateDetails(
+      [{ path: "auth/mw.ts", score: 7, signals: { fts: 1, path: 1, symbol: 0, recency: 0 } }],
+    ) }, isError: false });
+
+    // Now the agent reads files from BOTH locates.
+    c.onToolStart(startEv("r1", "read", { path: ROOT + "/db/conn.ts" }));
+    c.onToolEnd({ toolCallId: "r1", toolName: "read", result: { content: "x" }, isError: false });
+    c.onToolStart(startEv("r2", "read", { path: ROOT + "/db/model.ts" }));
+    c.onToolEnd({ toolCallId: "r2", toolName: "read", result: { content: "x" }, isError: false });
+    c.onToolStart(startEv("r3", "read", { path: ROOT + "/auth/mw.ts" }));
+    c.onToolEnd({ toolCallId: "r3", toolName: "read", result: { content: "x" }, isError: false });
+
+    const rows = db.prepare("SELECT path, locate_rank, cluster_kind FROM nav_consume WHERE session_id = ? ORDER BY seq").all(corrOpts.sessionId) as any[];
+    const byPath = Object.fromEntries(rows.map((r) => [r.path, r]));
+
+    assert.equal(byPath["db/conn.ts"].locate_rank, 1, "ranked file from earlier locate keeps its rank");
+    assert.equal(byPath["db/conn.ts"].cluster_kind, null);
+    assert.equal(byPath["db/model.ts"].cluster_kind, "cochange", "cluster file from earlier locate keeps cluster_kind");
+    assert.equal(byPath["db/model.ts"].locate_rank, null);
+    assert.equal(byPath["auth/mw.ts"].locate_rank, 1, "most-recent locate still attributes");
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
+test("most-recent locate wins on tie: same path ranked in both locates", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const opts = makeOpts(dbPath);
+    const { db, dbPath: _p, ...corrOpts } = opts;
+    const c = new TelemetryCorrelator({ ...corrOpts, db });
+
+    // shared.ts is rank 2 in locate #1, rank 1 in locate #2 → newest wins → rank 1
+    c.onToolStart(startEv("l1", "navigator_locate", { query: "first" }));
+    c.onToolEnd({ toolCallId: "l1", toolName: "navigator_locate", result: { details: makeLocateDetails([
+      { path: "x.ts", score: 9, signals: { fts: 1, path: 0, symbol: 0, recency: 0 } },
+      { path: "shared.ts", score: 5, signals: { fts: 1, path: 0, symbol: 0, recency: 0 } },
+    ]) }, isError: false });
+    c.onToolStart(startEv("l2", "navigator_locate", { query: "second" }));
+    c.onToolEnd({ toolCallId: "l2", toolName: "navigator_locate", result: { details: makeLocateDetails([
+      { path: "shared.ts", score: 8, signals: { fts: 1, path: 0, symbol: 0, recency: 0 } },
+    ]) }, isError: false });
+
+    c.onToolStart(startEv("r1", "read", { path: ROOT + "/shared.ts" }));
+    c.onToolEnd({ toolCallId: "r1", toolName: "read", result: { content: "x" }, isError: false });
+
+    const row = db.prepare("SELECT * FROM nav_consume WHERE session_id = ?").get(corrOpts.sessionId) as any;
+    assert.equal(row.locate_rank, 1, "most-recent locate's rank wins");
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
 test("telemetry never throws after DB is closed: guard() swallows DB errors", () => {
   const dbPath = makeTmpPath();
   try {

@@ -4,6 +4,17 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Fixed
+- **Telemetry attribution across batched locates.** The correlator kept a single
+  `lastLocate` slot, so when multiple `navigator_locate` calls fired before their
+  follow-up reads (parallel/batched tool calls — common in `--print` and agent
+  turns), the most recent locate clobbered earlier result sets. Ranked and cluster
+  files from earlier locates then received no `locate_rank`/`cluster_kind`,
+  undercounting hit-rate and zeroing cluster-assist in `/navigator stats`.
+  Now keeps a bounded ring of recent locates (cap 8) and attributes a consume to
+  the most-recent locate whose ranked/cluster set contains the path (ranked beats
+  cluster within a locate). Surfaced by dogfooding v0.6.0 against gridstrong.
+
 ## [v0.6.0] - 2026-06-04
 
 ### Fixed

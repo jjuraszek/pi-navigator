@@ -27,6 +27,9 @@ export interface CorrelatorOpts {
 }
 
 export class TelemetryCorrelator {
+  /** Cap on retained locate result sets for consume attribution; bounds memory and stale matches. */
+  private static readonly MAX_RECENT_LOCATES = 8;
+
   private readonly db: Db;
   private readonly sessionId: string;
   private readonly root: string;
@@ -38,7 +41,12 @@ export class TelemetryCorrelator {
   private turn = 0;
   private readonly pendingStart = new Map<string, number>();
   private readonly pendingArgs = new Map<string, any>();
-  private lastLocate: LocateState | null = null;
+  // A consume is attributed to whichever recent locate's ranked/cluster set contains its
+  // path. A single slot mis-attributes when several locates fire before their follow-up
+  // reads (parallel/batched tool calls): the last locate clobbers earlier result sets, so
+  // ranked/cluster files from earlier locates get no rank/cluster_kind. Keep a bounded ring
+  // and scan newest-first so the most-recent containing locate wins.
+  private readonly recentLocates: LocateState[] = [];
   private warned = false;
 
   constructor(o: CorrelatorOpts) {
@@ -107,11 +115,13 @@ export class TelemetryCorrelator {
   }
 
   private classifyConsume(path: string): { rank: number | null; clusterKind: "cochange" | "referrer" | null } {
-    if (!this.lastLocate) return { rank: null, clusterKind: null };
-    const rankedIdx = this.lastLocate.ranked.findIndex((p) => p === path);
-    if (rankedIdx !== -1) return { rank: rankedIdx + 1, clusterKind: null };
-    const clusterEntry = this.lastLocate.cluster.find((e) => e.path === path);
-    if (clusterEntry) return { rank: null, clusterKind: clusterEntry.kind };
+    for (let i = this.recentLocates.length - 1; i >= 0; i--) {
+      const loc = this.recentLocates[i];
+      const rankedIdx = loc.ranked.findIndex((p) => p === path);
+      if (rankedIdx !== -1) return { rank: rankedIdx + 1, clusterKind: null };
+      const clusterEntry = loc.cluster.find((e) => e.path === path);
+      if (clusterEntry) return { rank: null, clusterKind: clusterEntry.kind };
+    }
     return { rank: null, clusterKind: null };
   }
 
@@ -217,7 +227,8 @@ export class TelemetryCorrelator {
       ...((clusterDetails?.cochange ?? []) as string[]).map((p: string) => ({ path: p, kind: "cochange" as const })),
       ...((clusterDetails?.referrers ?? []) as string[]).map((p: string) => ({ path: p, kind: "referrer" as const })),
     ];
-    this.lastLocate = { ranked: resultsMetadata.map((r) => r.path), cluster: clusterEntries };
+    this.recentLocates.push({ ranked: resultsMetadata.map((r) => r.path), cluster: clusterEntries });
+    if (this.recentLocates.length > TelemetryCorrelator.MAX_RECENT_LOCATES) this.recentLocates.shift();
   }
 
   private onSlice(ev: any, ts: number, latencyMs: number | null): void {
