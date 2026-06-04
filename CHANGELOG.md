@@ -4,6 +4,35 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Added
+- **Usefulness telemetry & offline quality judge.** Opt-in passive-correlation
+  telemetry that records `navigator_locate` calls and the agent's follow-on
+  actions (slice/read/search) to a **separate** SQLite DB
+  (`<repo>_<id>.telemetry.db`), then derives usefulness metrics from the raw
+  event log. Every session writes its own rows, so the index's single-writer
+  invariant is untouched; all telemetry writes are guarded and can never throw
+  into the session.
+  - **Capture:** `TelemetryCorrelator` subscribes to the tool-event stream and
+    links each locate to what the agent did next within an attribution window
+    (until-next-locate, capped at 10 turns). Records per-result signal
+    decomposition (`fts`/`path`/`symbol`/`recency`), confidence inputs, query
+    type/token count, and index warmth at query time.
+  - **Derivation:** outcomes (`hit` / `miss-fallback` / `abandoned`),
+    `justified_fallback`, MRR, hit@k, low/high-confidence precision, bypass-session
+    rate, and stale-slice rate.
+  - **`/navigator stats`:** session + lifetime metrics in-session (distinguishes
+    telemetry-off from on-but-no-data).
+  - **Offline judge:** `scripts/export-cases.ts` joins telemetry against the live
+    index to emit a *proven* per-fallback verdict — `not_indexed` (recall gap) /
+    `indexed_not_returned` (retrieval gap) / `indexed` (ranking gap) — plus the
+    `usefulness-judge` dev-skill that explains navigation gaps and recommends
+    `rank.ts` weight changes.
+  - **Config:** `navigator.telemetry` (default **off**; dev/debug tool),
+    `telemetryStoreQueries`, `telemetryTurnCap`, `telemetryRetentionDays`.
+  - **Privacy:** secret paths (`.env*`, `*.pem`, `*.key`, `id_*`, `*.p12`) are
+    dropped from the export via the existing `isSecret` filter; the judge reads
+    paths only, never file contents.
+
 ## [v0.4.0] - 2026-06-03
 
 ### Added
