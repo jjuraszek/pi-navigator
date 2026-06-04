@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.5.0] - 2026-06-04
+
 ### Added
 - **Usefulness telemetry & offline quality judge.** Opt-in passive-correlation
   telemetry that records `navigator_locate` calls and the agent's follow-on
