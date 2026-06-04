@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.6.0] - 2026-06-04
+
 ### Fixed
 - **Telemetry attribution correctness.** Dogfooding v0.5.0 surfaced correlation
   bugs that the synthetic unit tests could not catch; this corrects the
