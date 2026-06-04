@@ -14,6 +14,10 @@ export interface NavigatorConfig {
   maxFileBytes: number;
   keywordStoplist: string[];    // extra stoplist terms appended to defaults; default []
   keywordMinLength: number;     // drop keyword tokens shorter than this; default 3
+  telemetry: boolean;              // master switch; default false
+  telemetryStoreQueries: boolean;  // store raw query text; default true
+  telemetryTurnCap: number;        // attribution window cap in assistant turns; default 10
+  telemetryRetentionDays: number;  // prune rows older than this on DB open; default 30
 }
 
 export interface FileRecord {
@@ -54,6 +58,10 @@ export interface LocateResponse {
   // top hit has no structural (symbol/path) anchor. Callers should fall back to
   // rg/find/read rather than trust the ranking.
   confidence: "high" | "low";
+  // raw inputs to the confidence verdict, surfaced for telemetry/judge calibration
+  has_exact_def: boolean;
+  used_or_fallback: boolean;
+  top_has_anchor: boolean;
 }
 
 /**

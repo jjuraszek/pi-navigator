@@ -83,6 +83,9 @@ export function locate(
     cluster: null,
     index: indexStatus,
     confidence: "low",
+    has_exact_def: false,
+    used_or_fallback: false,
+    top_has_anchor: false,
   };
 
   // --- FTS search (bm25 is negative; more negative = better) ---
@@ -134,7 +137,7 @@ export function locate(
   const defPaths = new Set(defRows.map((r) => r.path));
   const hasExactDef = defPaths.size > 0;
 
-  if (ftsRows.length === 0 && !hasExactDef) return empty;
+  if (ftsRows.length === 0 && !hasExactDef) return { ...empty, used_or_fallback: usedOrFallback };
 
   // --- compute bm25 normalisation: fts = -b (positive; larger = better match) ---
   // The most-negative b is the best match; negating makes it the largest fts value.
@@ -197,7 +200,7 @@ export function locate(
     scored.push({ path, meta, totalScore, signals, isExactDef });
   }
 
-  if (scored.length === 0) return empty;
+  if (scored.length === 0) return { ...empty, has_exact_def: hasExactDef, used_or_fallback: usedOrFallback };
 
   // Exact symbol-definition matches are pinned ahead of pure-FTS hits: an exact
   // identifier match is the strongest possible anchor, so it must not be diluted
@@ -301,5 +304,5 @@ export function locate(
     };
   }
 
-  return { results, cluster, index: indexStatus, confidence };
+  return { results, cluster, index: indexStatus, confidence, has_exact_def: hasExactDef, used_or_fallback: usedOrFallback, top_has_anchor: topHasAnchor };
 }

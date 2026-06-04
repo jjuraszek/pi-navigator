@@ -47,3 +47,18 @@ test("mergeConfig overlays partial user settings", () => {
   assert.equal(merged.maxLocateResults, 3);
   assert.equal(merged.indexBatchSize, DEFAULT_CONFIG.indexBatchSize);
 });
+
+test("telemetry config defaults", () => {
+  assert.equal(DEFAULT_CONFIG.telemetry, false);
+  assert.equal(DEFAULT_CONFIG.telemetryStoreQueries, true);
+  assert.equal(DEFAULT_CONFIG.telemetryTurnCap, 10);
+  assert.equal(DEFAULT_CONFIG.telemetryRetentionDays, 30);
+});
+
+test("mergeConfig: telemetry: true overrides default", () => {
+  const merged = mergeConfig({ telemetry: true });
+  assert.equal(merged.telemetry, true);
+  assert.equal(merged.telemetryStoreQueries, true);
+  assert.equal(merged.telemetryTurnCap, 10);
+  assert.equal(merged.telemetryRetentionDays, 30);
+});

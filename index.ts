@@ -1,8 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { relative, resolve, sep } from "node:path";
-import { posix } from "node:path";
+import { randomUUID } from "node:crypto";
+import { toRepoRel } from "./src/paths.ts";
 import { loadConfig } from "./src/config.ts";
 import { resolveRepo, headSha } from "./src/worktree.ts";
 import { openDb } from "./src/store/db.ts";
@@ -15,26 +15,17 @@ import { VerifiedCache } from "./src/navigator/verified-cache.ts";
 import { registerTools } from "./src/tools.ts";
 import type { NavigatorCtx } from "./src/tools.ts";
 import { registerNavigatorCommand } from "./src/commands.ts";
+import { openTelemetryDb } from "./src/telemetry/db.ts";
+import { TelemetryCorrelator } from "./src/telemetry/correlator.ts";
+import { aggregate } from "./src/telemetry/stats.ts";
+import type { Db } from "./src/store/db.ts";
 
-/**
- * Converts an absolute or cwd-relative path to a repo-relative POSIX path.
- * Returns undefined if the resolved path escapes the repo root.
- */
 /** Footer label for the current indexing coverage. */
 function statusLabel(cov: Coverage): string {
   const pct = cov.total === 0 ? 0 : Math.round((cov.indexed / cov.total) * 100);
   return cov.fullCrawlDone
     ? `navigator: ${pct}% indexed`
     : `navigator: indexing ${pct}%…`;
-}
-
-function toRepoRel(root: string, p: string, cwd: string): string | undefined {
-  const abs = resolve(cwd, p);
-  const rel = relative(root, abs);
-  // Escaped if it starts with ".." (POSIX join) or on Windows with sep
-  const posixRel = rel.split(sep).join(posix.sep);
-  if (posixRel.startsWith("..")) return undefined;
-  return posixRel;
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -52,6 +43,10 @@ export default function (pi: ExtensionAPI): void {
   // Map toolCallId → path for in-flight edit/write calls
   const pendingArgs = new Map<string, string>();
 
+  let correlator: TelemetryCorrelator | null = null;
+  let telemetryDb: Db | null = null;
+  let currentSessionId: string | null = null;
+
   // Register tools and command at load-time with late-bound state getters.
   registerTools(pi, () => state, () => repoStatus);
   registerNavigatorCommand(pi, () => ({
@@ -60,6 +55,19 @@ export default function (pi: ExtensionAPI): void {
     isWriter: rolling?.isWriter ?? false,
     dbPath: dbPathForStatus,
     reindex: (p?: string) => rolling?.reindex(p),
+    telemetryStats: config.telemetry ? () => {
+      if (!telemetryDb || !currentSessionId) return null;
+      // Aggregation reads SQLite directly; guard so a DB error in /navigator stats
+      // can never reject into the command handler (telemetry must never break the session).
+      try {
+        return {
+          session: aggregate(telemetryDb, { turnCap: config.telemetryTurnCap, scope: currentSessionId }),
+          lifetime: aggregate(telemetryDb, { turnCap: config.telemetryTurnCap, scope: "lifetime" }),
+        };
+      } catch {
+        return null;
+      }
+    } : null,
   }));
 
   // -------------------------------------------------------------------------
@@ -123,8 +131,22 @@ export default function (pi: ExtensionAPI): void {
     });
     rolling.onPromote(() => {
       ui?.setStatus("navigator", "navigator: indexing…");
+      correlator?.markWriter();
     });
     rolling.start(repo);
+
+    if (config.telemetry) {
+      telemetryDb = openTelemetryDb(repo.dbPath, config.telemetryRetentionDays);
+      if (telemetryDb) {
+        try { currentSessionId = ctx.sessionManager.getSessionId(); }
+        catch { currentSessionId = randomUUID(); }
+        correlator = new TelemetryCorrelator({
+          db: telemetryDb, sessionId: currentSessionId, root: repo.root,
+          sessionCwd: ctx.cwd, headSha: headSha(repo.root),
+          isWriter: rolling.isWriter, storeQueries: config.telemetryStoreQueries,
+        });
+      }
+    }
 
     ctx.ui.setStatus(
       "navigator",
@@ -146,6 +168,7 @@ export default function (pi: ExtensionAPI): void {
   // tool_execution_start — capture path args for edit/write tools
   // -------------------------------------------------------------------------
   pi.on("tool_execution_start", async (event) => {
+    correlator?.onToolStart(event);
     if (event.toolName !== "edit" && event.toolName !== "write") return;
     const args = event.args as Record<string, unknown> | undefined;
     if (!args) return;
@@ -160,6 +183,7 @@ export default function (pi: ExtensionAPI): void {
   // tool_execution_end — post re-index priority for successfully edited files
   // -------------------------------------------------------------------------
   pi.on("tool_execution_end", async (event) => {
+    correlator?.onToolEnd(event);
     const p = pendingArgs.get(event.toolCallId);
     pendingArgs.delete(event.toolCallId);
     if (!p || event.isError || !rolling || !state) return;
@@ -167,6 +191,8 @@ export default function (pi: ExtensionAPI): void {
     const rel = toRepoRel(state.root, p, sessionCwd);
     if (rel) rolling.postPriority([rel]);
   });
+
+  pi.on("turn_start", async (event) => { correlator?.bumpTurn(event.turnIndex); });
 
   // -------------------------------------------------------------------------
   // turn_end — update the navigator status widget with the latest coverage
@@ -201,6 +227,10 @@ export default function (pi: ExtensionAPI): void {
   // session_shutdown — tear down worker, release lock, close DB
   // -------------------------------------------------------------------------
   pi.on("session_shutdown", async () => {
+    try { telemetryDb?.close(); } catch {}
+    telemetryDb = null;
+    correlator = null;
+    currentSessionId = null;
     rolling?.stop();
     rolling = null;
     try {

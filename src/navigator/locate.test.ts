@@ -111,6 +111,12 @@ test("locate on no match returns empty, no throw", async () => {
   const res = locate(db, root, "nonexistentsymbolxyz", DEFAULT_CONFIG);
   assert.deepEqual(res.results, []);
   assert.equal(res.cluster, null);
+  // Telemetry: has_exact_def and top_has_anchor are genuinely false (no def lookup, no top).
+  // used_or_fallback reflects the live local: OR fallback is always attempted when AND yields
+  // zero, even for a single token, so the value is true — not a hardcoded constant.
+  assert.equal(res.has_exact_def, false);
+  assert.equal(res.used_or_fallback, true);
+  assert.equal(res.top_has_anchor, false);
 });
 
 async function multiWordFixture() {
@@ -216,6 +222,9 @@ test("bare CamelCase token resolves to the definition even when FTS dilutes", as
   );
   assert.equal(res.results[0].path, "model.rb", "definition site ranks first");
   assert.equal(res.confidence, "high");
+  // Telemetry confidence inputs: identifier-like CamelCase token triggers exact-def lookup
+  assert.equal(res.has_exact_def, true, "CamelCase identifier must set has_exact_def");
+  assert.equal(res.top_has_anchor, true, "definition site must have an anchor signal");
 });
 
 test("common dictionary-word token does NOT force exact-def pinning", async () => {

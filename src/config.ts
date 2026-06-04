@@ -17,6 +17,10 @@ export const DEFAULT_CONFIG: NavigatorConfig = {
   maxFileBytes: 1048576,
   keywordStoplist: [],
   keywordMinLength: 3,
+  telemetry: false,
+  telemetryStoreQueries: true,
+  telemetryTurnCap: 10,
+  telemetryRetentionDays: 30,
 };
 
 export function mergeConfig(partial: Partial<NavigatorConfig>): NavigatorConfig {

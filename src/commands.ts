@@ -1,4 +1,5 @@
 import type { Coverage } from "./types.ts";
+import type { StatsSummary } from "./telemetry/types.ts";
 
 export interface NavigatorState {
   active: boolean;
@@ -6,25 +7,54 @@ export interface NavigatorState {
   isWriter: boolean;
   dbPath: string;
   reindex(path?: string): void;
+  telemetryStats: (() => { session: StatsSummary; lifetime: StatsSummary } | null) | null;
 }
 
 export interface PiLike {
   registerCommand(name: string, opts: { description: string; handler: (args: string, ctx: any) => Promise<void> }): void;
 }
 
-export function parseSub(args: string): { sub: "status" | "reindex"; path?: string } {
+export function parseSub(args: string): { sub: "status" | "reindex" | "stats"; path?: string } {
   const tokens = args.trim().split(/\s+/).filter((t) => t.length > 0);
   const sub = tokens[0] ?? "";
   if (sub === "reindex") {
     const path = tokens.slice(1).join(" ") || undefined;
     return path !== undefined ? { sub: "reindex", path } : { sub: "reindex" };
   }
+  if (sub === "stats") return { sub: "stats" };
   return { sub: "status" };
+}
+
+// Curated subset of StatsSummary for in-session glance; the full field set is
+// emitted by the offline judge export (scripts/export-cases.ts).
+export function formatStats(label: string, s: StatsSummary): string {
+  const pct = (r: number) => `${(r * 100).toFixed(0)}%`;
+  const reasons = Object.keys(s.unavailableByReason).length === 0
+    ? "none"
+    : Object.entries(s.unavailableByReason).map(([k, v]) => `${k}=${v}`).join(" ");
+  const lines = [
+    `navigator stats [${label}]`,
+    `  locate_total              ${s.locateTotal}`,
+    `  hit_rate                  ${pct(s.hitRate)}`,
+    `  mrr                       ${s.mrr.toFixed(3)}`,
+    `  hit@1                     ${pct(s.hitAt1)}`,
+    `  hit@3                     ${pct(s.hitAt3)}`,
+    `  hit@5                     ${pct(s.hitAt5)}`,
+    `  miss_fallback             ${s.missFallback}`,
+    `  miss_fallback_unjustified ${s.missFallbackUnjustified}`,
+    `  abandoned                 ${s.abandoned}`,
+    `  zero_result_locates       ${s.zeroResultLocates}`,
+    `  low_conf_precision        ${pct(s.lowConfPrecision)}`,
+    `  bypass_session_rate       ${pct(s.bypassSessionRate)}`,
+    `  stale_slice_rate          ${pct(s.staleSliceRate)}`,
+    `  unavailable_by_reason     ${reasons}`,
+  ];
+  return lines.join("\n");
 }
 
 export function registerNavigatorCommand(pi: PiLike, getState: () => NavigatorState): void {
   pi.registerCommand("navigator", {
-    description: "Repository navigator: status / reindex [path]",
+    description: "Repository navigator: status / reindex [path] / stats",
     handler: async (args: string, ctx: any) => {
       const parsed = parseSub(args);
       const state = getState();
@@ -44,6 +74,20 @@ export function registerNavigatorCommand(pi: PiLike, getState: () => NavigatorSt
           ? `navigator: reindex queued for ${parsed.path}`
           : "navigator: reindex queued";
         ctx.ui.notify(msg, "info");
+        return;
+      }
+
+      if (parsed.sub === "stats") {
+        if (!state.telemetryStats) {
+          ctx.ui.notify("navigator telemetry is off (set navigator.telemetry: true to record)", "info");
+          return;
+        }
+        const stats = state.telemetryStats();
+        if (!stats) {
+          ctx.ui.notify("navigator: telemetry on, no data recorded yet", "info");
+          return;
+        }
+        ctx.ui.notify(formatStats("session", stats.session) + "\n\n" + formatStats("lifetime", stats.lifetime), "info");
         return;
       }
 
