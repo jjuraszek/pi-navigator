@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.7.0] - 2026-06-07
+
 - **Prompt guidance:** navigator now injects automatic readiness-gated repo-orientation guidance when `navigator_locate` is selected and the index is complete/current/clean; `navigator.injectPersona` is no longer a behavior switch.
 
 ## [v0.6.1] - 2026-06-04
