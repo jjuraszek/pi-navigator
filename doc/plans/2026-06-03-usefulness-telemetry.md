@@ -975,7 +975,7 @@ Depends on Wave 3 (`deriveLocateOutcomes`) + Wave 2 (telemetry schema, `store/qu
   - **When to use** — offline, dev-only, after telemetry has accumulated.
   - **First-iteration scope** — the grounded "answers" list and the explicit "defers" list (verbatim intent from spec).
   - **How to run** — `node scripts/export-cases.ts --index-db <path> --query-type identifier --limit N`, then for each case read the `indexed` verdict and classify the gap (recall / retrieval / ranking / justified-fallback / low-confidence).
-  - **What to emit** — per-case grade with evidence (rank, dominant signal, index verdict); aggregate ranking-position + flag-calibration tables; evidence-backed recommendations against `src/navigator/rank.ts` weights (`w_fts`/`w_path`/`w_symbol`/`w_recency` — note actual names are `DEFAULT_WEIGHTS.{fts,path,symbol,recency}`) and the `confidence` threshold; an explicit "insufficient evidence" list; a report under `eval/reports/<date>-usefulness.md`.
+  - **What to emit** — per-case grade with evidence (rank, dominant signal, index verdict); aggregate ranking-position + flag-calibration tables; evidence-backed recommendations against `src/navigator/rank.ts` weights (`w_fts`/`w_path`/`w_symbol`/`w_recency` — note actual names are `DEFAULT_WEIGHTS.{fts,path,symbol,recency}`) and the `confidence` threshold; an explicit "insufficient evidence" list; a report under `build/eval/reports/<date>-usefulness.md`.
   - **Privacy note** — paths only, never contents; secret paths are masked by the export.
 
 - [ ] **Step 2: Verify it is not in the shipped manifest**

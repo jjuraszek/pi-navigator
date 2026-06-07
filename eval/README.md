@@ -7,3 +7,5 @@ Run against this repo: `node eval/run.ts --repo /path/to/pi-navigator`
 Run against another repo: `node eval/run.ts --repo /path/to/repo` — update `cases.jsonl` with cases meaningful for that repo first.
 
 Optional: `--k <n>` sets the hit@k window (default 5).
+
+Write ad-hoc eval analysis reports under `build/eval/reports/`; `build/` is gitignored.

@@ -439,7 +439,7 @@ about what it defers.
      threshold — each tied to the cases that motivate it,
    - an **explicit "insufficient evidence" list**: patterns seen but not
      gradeable in iteration 1, feeding the next spec,
-   - a written report under `eval/reports/<date>-usefulness.md`.
+   - a written report under `build/eval/reports/<date>-usefulness.md`.
 
 The judge consumes only what the correlator persisted plus the live index for
 ground truth; it adds no new runtime capture.

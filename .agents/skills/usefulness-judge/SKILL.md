@@ -60,7 +60,7 @@ This skill is **read-only analysis** — it never reads source file contents, on
 
 ### What to emit
 
-Write a report to `eval/reports/<YYYY-MM-DD>-usefulness.md` containing:
+Write a report to `build/eval/reports/<YYYY-MM-DD>-usefulness.md` containing:
 
 1. **Per-case grade table** — one row per identifier case: case id, gap class, dominant signal (from `resultsMetadata[0].signals`, highest value wins), `fallbackVerdicts[0].indexed` verdict, outcome.
 
