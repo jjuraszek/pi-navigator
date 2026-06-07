@@ -48,13 +48,13 @@ pi -e ~/repos/pi-navigator/index.ts
 
 ### What each install path loads
 
-| Path | Tools | Persona | Skill |
+| Path | Tools | Guidance | Skill |
 |---|---|---|---|
-| `pi install` / `pi install -l` (package in settings.json) | ✅ `navigator_locate`, `navigator_slice` | ✅ injected at session start (when `injectPersona: true`) | ✅ `navigator` skill auto-discovered via `pi.skills` in package.json |
-| `pi -e index.ts` (bare `-e`) | ✅ tools loaded | ✅ persona injected | ❌ skill **not** auto-discovered (no settings.json entry) |
-| `pi -e git:...` (one-shot) | ✅ tools loaded | ✅ persona injected | ❌ skill **not** auto-discovered |
+| `pi install` / `pi install -l` (package in settings.json) | ✅ `navigator_locate`, `navigator_slice` | ✅ automatic when index is complete/current/clean | ✅ `navigator` skill auto-discovered via `pi.skills` in package.json |
+| `pi -e index.ts` (bare `-e`) | ✅ tools loaded | ✅ automatic when index is complete/current/clean | ❌ skill **not** auto-discovered (no settings.json entry) |
+| `pi -e git:...` (one-shot) | ✅ tools loaded | ✅ automatic when index is complete/current/clean | ❌ skill **not** auto-discovered |
 
-For full skill discovery (so the agent auto-consults the `navigator` SKILL.md), use the package-install path. With bare `-e`, tools and the persona nudge are active but the skill file requires explicit loading.
+For full skill discovery (so the agent auto-consults the `navigator` SKILL.md), use the package-install path. With bare `-e`, the tools and automatic prompt guidance are active but the skill file requires explicit loading.
 
 ---
 
@@ -97,7 +97,6 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 {
   "navigator": {
     "enabled": true,
-    "injectPersona": false,
     "indexDir": "~/.pi/pi-navigator-cache",
     "languages": ["ruby", "python", "ts", "js"],
     "maxLocateResults": 10,
@@ -114,7 +113,6 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 | Key | Default | Notes |
 |---|---|---|
 | `enabled` | `true` | Master switch. |
-| `injectPersona` | `true` | Inject a system-prompt line when navigator tools are active, asserting navigator-first orientation before rg/find/read. Set to `false` to opt out. |
 | `indexDir` | `~/.pi/pi-navigator-cache` | Index location. Filename: `<repo_name>_<repo_id>.db`. |
 | `languages` | `["ruby","python","ts","js"]` | Languages for symbol extraction. |
 | `maxLocateResults` | `10` | Max results from `navigator_locate`. |
@@ -124,6 +122,8 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 | `cochangeMaxCommits` | `4000` | Commit scan bound for co-change. |
 | `cochangeMaxFilesPerCommit` | `50` | Skip mega-commits for co-change (still counted for recency). |
 | `maxFileBytes` | `1048576` | Files larger than this are skipped. |
+
+Prompt guidance is automatic when navigator is enabled, `navigator_locate` is selected, and the index is complete, current, and clean for the active worktree. Broad repo-orientation prompts get a short additional nudge; exact-path and external-only prompts do not. `navigator.injectPersona` is ignored and no longer a supported behavior switch. Use `/navigator status` to inspect readiness.
 
 ---
 

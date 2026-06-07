@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+- **Prompt guidance:** navigator now injects automatic readiness-gated repo-orientation guidance when `navigator_locate` is selected and the index is complete/current/clean; `navigator.injectPersona` is no longer a behavior switch.
+
 ## [v0.6.1] - 2026-06-04
 
 ### Fixed
@@ -254,7 +256,7 @@ All notable changes are documented here. Newest first.
   `config.languages`. Docs are now locatable by filename and by body term.
 
 ### Changed
-- **Pickup:** `navigator.injectPersona` now defaults on; the tool description,
+- **Pickup:** prompt guidance now defaulted on; the tool description,
   persona, and skill all lead with navigator-first guidance for "where is X" /
   "what's related" queries, with an explicit `rg` boundary (regex/full-content
   scans stay with `rg`).

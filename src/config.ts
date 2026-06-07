@@ -3,9 +3,13 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import type { NavigatorConfig } from "./types.ts";
 
+interface NavigatorConfigInput extends Partial<NavigatorConfig> {
+  injectPersona?: unknown;
+  [key: string]: unknown;
+}
+
 export const DEFAULT_CONFIG: NavigatorConfig = {
   enabled: true,
-  injectPersona: true,
   indexDir: join(homedir(), ".pi", "pi-navigator-cache"),
   languages: ["ruby", "python", "ts", "js"],
   maxLocateResults: 10,
@@ -23,16 +27,75 @@ export const DEFAULT_CONFIG: NavigatorConfig = {
   telemetryRetentionDays: 30,
 };
 
-export function mergeConfig(partial: Partial<NavigatorConfig>): NavigatorConfig {
-  const merged = { ...DEFAULT_CONFIG, ...partial };
-  merged.keywordStoplist = Array.isArray(partial.keywordStoplist)
-    ? partial.keywordStoplist.map((s) => String(s).toLowerCase())
-    : DEFAULT_CONFIG.keywordStoplist;
-  merged.keywordMinLength =
-    Number.isInteger(partial.keywordMinLength) && (partial.keywordMinLength as number) > 0
-      ? (partial.keywordMinLength as number)
-      : DEFAULT_CONFIG.keywordMinLength;
-  return merged;
+export function mergeConfig(partial: NavigatorConfigInput): NavigatorConfig {
+  return {
+    enabled:
+      typeof partial.enabled === "boolean"
+        ? partial.enabled
+        : DEFAULT_CONFIG.enabled,
+    indexDir:
+      typeof partial.indexDir === "string"
+        ? partial.indexDir
+        : DEFAULT_CONFIG.indexDir,
+    languages:
+      Array.isArray(partial.languages)
+        ? partial.languages.filter(
+          (lang): lang is NavigatorConfig["languages"][number] =>
+            lang === "ruby" || lang === "python" || lang === "ts" || lang === "js" || lang === "prose",
+        )
+        : DEFAULT_CONFIG.languages,
+    maxLocateResults:
+      Number.isInteger(partial.maxLocateResults) && (partial.maxLocateResults as number) > 0
+        ? (partial.maxLocateResults as number)
+        : DEFAULT_CONFIG.maxLocateResults,
+    indexBatchSize:
+      Number.isInteger(partial.indexBatchSize) && (partial.indexBatchSize as number) > 0
+        ? (partial.indexBatchSize as number)
+        : DEFAULT_CONFIG.indexBatchSize,
+    indexIdleMs:
+      Number.isInteger(partial.indexIdleMs) && (partial.indexIdleMs as number) >= 0
+        ? (partial.indexIdleMs as number)
+        : DEFAULT_CONFIG.indexIdleMs,
+    cochangeWindowDays:
+      Number.isInteger(partial.cochangeWindowDays) && (partial.cochangeWindowDays as number) > 0
+        ? (partial.cochangeWindowDays as number)
+        : DEFAULT_CONFIG.cochangeWindowDays,
+    cochangeMaxCommits:
+      Number.isInteger(partial.cochangeMaxCommits) && (partial.cochangeMaxCommits as number) > 0
+        ? (partial.cochangeMaxCommits as number)
+        : DEFAULT_CONFIG.cochangeMaxCommits,
+    cochangeMaxFilesPerCommit:
+      Number.isInteger(partial.cochangeMaxFilesPerCommit) && (partial.cochangeMaxFilesPerCommit as number) > 0
+        ? (partial.cochangeMaxFilesPerCommit as number)
+        : DEFAULT_CONFIG.cochangeMaxFilesPerCommit,
+    maxFileBytes:
+      Number.isInteger(partial.maxFileBytes) && (partial.maxFileBytes as number) > 0
+        ? (partial.maxFileBytes as number)
+        : DEFAULT_CONFIG.maxFileBytes,
+    keywordStoplist: Array.isArray(partial.keywordStoplist)
+      ? partial.keywordStoplist.map((s) => String(s).toLowerCase())
+      : DEFAULT_CONFIG.keywordStoplist,
+    keywordMinLength:
+      Number.isInteger(partial.keywordMinLength) && (partial.keywordMinLength as number) > 0
+        ? (partial.keywordMinLength as number)
+        : DEFAULT_CONFIG.keywordMinLength,
+    telemetry:
+      typeof partial.telemetry === "boolean"
+        ? partial.telemetry
+        : DEFAULT_CONFIG.telemetry,
+    telemetryStoreQueries:
+      typeof partial.telemetryStoreQueries === "boolean"
+        ? partial.telemetryStoreQueries
+        : DEFAULT_CONFIG.telemetryStoreQueries,
+    telemetryTurnCap:
+      Number.isInteger(partial.telemetryTurnCap) && (partial.telemetryTurnCap as number) > 0
+        ? (partial.telemetryTurnCap as number)
+        : DEFAULT_CONFIG.telemetryTurnCap,
+    telemetryRetentionDays:
+      Number.isInteger(partial.telemetryRetentionDays) && (partial.telemetryRetentionDays as number) > 0
+        ? (partial.telemetryRetentionDays as number)
+        : DEFAULT_CONFIG.telemetryRetentionDays,
+  };
 }
 
 function agentDir(): string {
@@ -42,7 +105,7 @@ function agentDir(): string {
 export function loadConfig(): NavigatorConfig {
   try {
     const raw = readFileSync(join(agentDir(), "settings.json"), "utf8");
-    const settings = JSON.parse(raw) as { navigator?: Partial<NavigatorConfig> };
+    const settings = JSON.parse(raw) as { navigator?: NavigatorConfigInput };
     return mergeConfig(settings.navigator ?? {});
   } catch {
     return { ...DEFAULT_CONFIG };

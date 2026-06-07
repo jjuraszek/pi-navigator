@@ -1,1 +1,1 @@
-This repo has a navigator index covering code **and** docs. For any "where is X", "where do I start", or "what's related to Y" question, call `navigator_locate` **before** `rg`/`find`/`read`. Use `navigator_slice` to read exact spans; a slice marked `unchanged_since_last_read` needs no re-read. Use `rg` only for regex or full-content scans across many files.
+Repo orientation rule: when a task requires finding code/docs and no exact path is already known, call `navigator_locate` once before broad `rg`/`find`/`read`; use `rg` for regex or full-content scans.

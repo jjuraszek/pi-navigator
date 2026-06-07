@@ -356,6 +356,12 @@ The worker commits every `indexBatchSize` files (default 50) in a `BEGIN IMMEDIA
 - `head_behind`: number of commits the indexed HEAD is behind the current HEAD. `0` when HEAD matches, regardless of working-tree dirtiness. Computed via `git rev-list` commit counting.
 - `coverage`: `coverage_indexed / coverage_total`.
 
+## Prompt Guidance Readiness
+
+Navigator prompt guidance is automatic rather than user-configured. During `before_agent_start`, the extension appends the persona line only when `navigator_locate` is selected and the index is ready: coverage is non-empty and complete, `full_crawl_done = "1"`, `head_sha_at_index` matches the active repo `HEAD`, the worktree is clean, and the worker is not in a known failed state. Broad repo-orientation prompts receive one additional nudge to call `navigator_locate` before broad filesystem search.
+
+This guidance is soft and non-blocking: it does not force the first tool call or replace `rg` for regex/full-content scans. `navigator.injectPersona` is ignored and no longer a supported behavior switch. If readiness cannot be proven, the extension fails quiet and injects no prompt guidance; use `/navigator status` for readiness details.
+
 `/navigator status` shows these values plus queue depth and lock owner.
 
 ---

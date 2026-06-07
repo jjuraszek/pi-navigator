@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { toRepoRel } from "./src/paths.ts";
 import { loadConfig } from "./src/config.ts";
-import { resolveRepo, headSha } from "./src/worktree.ts";
+import { resolveRepo, headSha, workingTreeDirty } from "./src/worktree.ts";
+import { buildNavigatorPromptGuidance } from "./src/prompt-guidance.ts";
 import { openDb } from "./src/store/db.ts";
 import { migrate } from "./src/store/schema.ts";
 import { getMeta, getCoverage } from "./src/store/queries.ts";
@@ -34,7 +35,7 @@ export default function (pi: ExtensionAPI): void {
   let rolling: RollingIndexer | null = null;
   let repoStatus: RepoStatus = "booting";
   let dbPathForStatus = "";
-  let config = loadConfig(); // outer config so before_agent_start can read it
+  let config = loadConfig();
   let sessionCwd = process.cwd(); // updated in session_start
   // Captured in session_start so background coverage updates can refresh the
   // footer between turns (the worker finishes indexing while the user is idle).
@@ -206,20 +207,34 @@ export default function (pi: ExtensionAPI): void {
   });
 
   // -------------------------------------------------------------------------
-  // before_agent_start — optionally inject the persona line
+  // before_agent_start — append readiness-gated navigator guidance
   // -------------------------------------------------------------------------
   pi.on("before_agent_start", async (event) => {
-    if (!config.injectPersona) return;
-    const active: string[] = event.systemPromptOptions?.selectedTools ?? [];
-    if (!active.includes("navigator_locate")) return;
+    if (!state || repoStatus !== "ready") return;
     try {
       const personaPath = fileURLToPath(
         new URL("./prompts/navigator-persona.md", import.meta.url),
       );
       const persona = readFileSync(personaPath, "utf8").trim();
-      return { systemPrompt: event.systemPrompt + "\n\n" + persona };
+      const coverage = getCoverage(state.db);
+      const guidance = buildNavigatorPromptGuidance({
+        prompt: event.prompt ?? "",
+        persona,
+        readiness: {
+          repoResolved: true,
+          selectedTools: event.systemPromptOptions?.selectedTools,
+          coverage,
+          fullCrawlDone: getMeta(state.db, "full_crawl_done") === "1",
+          indexedHead: getMeta(state.db, "head_sha_at_index"),
+          currentHead: headSha(state.root),
+          dirty: workingTreeDirty(state.root),
+          workerFailed: rolling?.workerFailed ?? false,
+        },
+      });
+      if (guidance.length === 0) return;
+      return { systemPrompt: [event.systemPrompt, ...guidance].join("\n\n") };
     } catch {
-      // If the file is missing, silently skip persona injection.
+      return undefined;
     }
   });
 

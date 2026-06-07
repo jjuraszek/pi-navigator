@@ -2,7 +2,6 @@ export type Lang = "ruby" | "python" | "ts" | "js" | "prose";
 
 export interface NavigatorConfig {
   enabled: boolean;
-  injectPersona: boolean;
   indexDir: string;            // default ~/.pi/pi-navigator-cache
   languages: Lang[];
   maxLocateResults: number;
