@@ -17,6 +17,10 @@ export interface NavigatorConfig {
   telemetryStoreQueries: boolean;  // store raw query text; default true
   telemetryTurnCap: number;        // attribution window cap in assistant turns; default 10
   telemetryRetentionDays: number;  // prune rows older than this on DB open; default 30
+  persona: boolean;             // M1 always-on persona tier; default true
+  promptNudge: boolean;         // M1 freshness-gated nudge tier; default true
+  strongHitDirective: boolean;  // M2 locate strong-hit directive; default true
+  grepBlock: boolean;           // M3 shell-grep block (bash only); default true
 }
 
 export interface FileRecord {

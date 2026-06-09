@@ -15,6 +15,8 @@ export interface BuildNavigatorPromptGuidanceArgs {
   prompt: string;
   persona: string;
   readiness: NavigatorPromptReadinessFacts;
+  enablePersona: boolean;
+  enableNudge: boolean;
 }
 
 export const NAVIGATOR_PROMPT_NUDGE =
@@ -140,19 +142,31 @@ export function isNavigatorPromptGuidanceReady(facts: NavigatorPromptReadinessFa
   );
 }
 
-export function buildNavigatorPromptGuidance(args: BuildNavigatorPromptGuidanceArgs): string[] {
-  if (!isNavigatorPromptGuidanceReady(args.readiness)) {
-    return [];
-  }
+// Persona tier gate: fires whenever the index is merely usable (at least one file
+// indexed, worker alive, tool selected). NOT gated on freshness — dirty/partial/
+// behind-HEAD repos are the exact case where always-on orientation is most needed.
+export function personaUsable(facts: NavigatorPromptReadinessFacts): boolean {
+  return (
+    facts.repoResolved &&
+    facts.selectedTools?.includes("navigator_locate") === true &&
+    facts.coverage.indexed > 0 &&
+    !facts.workerFailed
+  );
+}
 
+export function buildNavigatorPromptGuidance(args: BuildNavigatorPromptGuidanceArgs): string[] {
   const guidance: string[] = [];
   const persona = args.persona.trim();
 
-  if (persona) {
+  if (args.enablePersona && persona && personaUsable(args.readiness)) {
     guidance.push(persona);
   }
 
-  if (classifyNavigatorPrompt(args.prompt) === "likely_orientation") {
+  if (
+    args.enableNudge &&
+    isNavigatorPromptGuidanceReady(args.readiness) &&
+    classifyNavigatorPrompt(args.prompt) === "likely_orientation"
+  ) {
     guidance.push(NAVIGATOR_PROMPT_NUDGE);
   }
 

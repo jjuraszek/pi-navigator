@@ -25,6 +25,10 @@ export const DEFAULT_CONFIG: NavigatorConfig = {
   telemetryStoreQueries: true,
   telemetryTurnCap: 10,
   telemetryRetentionDays: 30,
+  persona: true,
+  promptNudge: true,
+  strongHitDirective: true,
+  grepBlock: true,
 };
 
 export function mergeConfig(partial: NavigatorConfigInput): NavigatorConfig {
@@ -95,6 +99,14 @@ export function mergeConfig(partial: NavigatorConfigInput): NavigatorConfig {
       Number.isInteger(partial.telemetryRetentionDays) && (partial.telemetryRetentionDays as number) > 0
         ? (partial.telemetryRetentionDays as number)
         : DEFAULT_CONFIG.telemetryRetentionDays,
+    persona:
+      typeof partial.persona === "boolean" ? partial.persona : DEFAULT_CONFIG.persona,
+    promptNudge:
+      typeof partial.promptNudge === "boolean" ? partial.promptNudge : DEFAULT_CONFIG.promptNudge,
+    strongHitDirective:
+      typeof partial.strongHitDirective === "boolean" ? partial.strongHitDirective : DEFAULT_CONFIG.strongHitDirective,
+    grepBlock:
+      typeof partial.grepBlock === "boolean" ? partial.grepBlock : DEFAULT_CONFIG.grepBlock,
   };
 }
 

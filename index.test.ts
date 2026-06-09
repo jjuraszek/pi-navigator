@@ -47,16 +47,26 @@ async function locateText(pi: ReturnType<typeof fakePi>): Promise<string> {
 async function waitForPromptResult(
   pi: ReturnType<typeof fakePi>,
   event: ReturnType<typeof promptEvent>,
+  until?: (result: any) => boolean,
 ): Promise<any> {
   const deadline = Date.now() + 3_000;
   let last: any;
   while (Date.now() < deadline) {
     last = await pi.fire("before_agent_start", event, undefined);
-    if (last !== undefined) return last;
+    // Default: settle on the first non-empty guidance. With `until`, keep
+    // polling until the predicate holds. The persona tier fires as soon as the
+    // index is usable (mid-crawl), so a test that needs the freshness-gated
+    // nudge must wait for full-crawl completion via `until`, not the first hit.
+    const done = until ? last !== undefined && until(last) : last !== undefined;
+    if (done) return last;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return last;
 }
+
+const nudgePresent = (r: any): boolean =>
+  typeof r?.systemPrompt === "string" &&
+  r.systemPrompt.includes(NAVIGATOR_PROMPT_NUDGE);
 
 function withAgentSettings(navigator: Record<string, unknown>): { agentDir: string; restore: () => void } {
   const agentDir = mkdtempSync(join(tmpdir(), "nav-agent-"));
@@ -159,22 +169,25 @@ test("before_agent_start: ready broad prompt appends persona and nudge despite s
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"], injectPersona: false });
   const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
   try {
-    const pi = fakePi();
-    ext(pi as any);
     await pi.fire("session_start", {}, noopCtx(repo));
 
+    // Wait for the nudge specifically: the persona fires mid-crawl, so polling
+    // for the first non-empty result would race and return persona-only.
     const result = await waitForPromptResult(
       pi,
       promptEvent("investigate why navigator is rarely used in gridstrong"),
+      nudgePresent,
     );
 
     assert.ok(result);
     assert.match(result.systemPrompt, /base system prompt/);
     assert.match(result.systemPrompt, new RegExp(PERSONA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(result.systemPrompt, new RegExp(NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    await pi.fire("session_shutdown", {}, undefined);
   } finally {
+    await pi.fire("session_shutdown", {}, undefined);
     restore();
     rmSync(repo, { recursive: true, force: true });
     rmSync(indexDir, { recursive: true, force: true });
@@ -185,9 +198,9 @@ test("before_agent_start: ready exact-path prompt appends persona only", async (
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
   try {
-    const pi = fakePi();
-    ext(pi as any);
     await pi.fire("session_start", {}, noopCtx(repo));
 
     const result = await waitForPromptResult(pi, promptEvent("read grid.rb"));
@@ -195,8 +208,8 @@ test("before_agent_start: ready exact-path prompt appends persona only", async (
     assert.ok(result);
     assert.match(result.systemPrompt, new RegExp(PERSONA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.doesNotMatch(result.systemPrompt, new RegExp(NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    await pi.fire("session_shutdown", {}, undefined);
   } finally {
+    await pi.fire("session_shutdown", {}, undefined);
     restore();
     rmSync(repo, { recursive: true, force: true });
     rmSync(indexDir, { recursive: true, force: true });
@@ -207,9 +220,9 @@ test("before_agent_start: missing navigator_locate selected tool appends no guid
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
   try {
-    const pi = fakePi();
-    ext(pi as any);
     await pi.fire("session_start", {}, noopCtx(repo));
 
     assert.ok(
@@ -225,21 +238,21 @@ test("before_agent_start: missing navigator_locate selected tool appends no guid
       undefined,
     );
     assert.equal(noGuidance, undefined);
-    await pi.fire("session_shutdown", {}, undefined);
   } finally {
+    await pi.fire("session_shutdown", {}, undefined);
     restore();
     rmSync(repo, { recursive: true, force: true });
     rmSync(indexDir, { recursive: true, force: true });
   }
 });
 
-test("before_agent_start: dirty worktree appends no guidance", async () => {
+test("before_agent_start: dirty worktree appends persona only", async () => {
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
   try {
-    const pi = fakePi();
-    ext(pi as any);
     await pi.fire("session_start", {}, noopCtx(repo));
 
     assert.ok(
@@ -250,27 +263,29 @@ test("before_agent_start: dirty worktree appends no guidance", async () => {
     );
 
     writeFileSync(join(repo, "grid.rb"), "class Grid\n  def sync\n    :dirty\n  end\nend\n");
-    const noGuidance = await pi.fire(
+    const result = await pi.fire(
       "before_agent_start",
       promptEvent("investigate why navigator is rarely used in gridstrong"),
       undefined,
     );
-    assert.equal(noGuidance, undefined);
-    await pi.fire("session_shutdown", {}, undefined);
+    assert.ok(result);
+    assert.match(result.systemPrompt, new RegExp(PERSONA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(result.systemPrompt, new RegExp(NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   } finally {
+    await pi.fire("session_shutdown", {}, undefined);
     restore();
     rmSync(repo, { recursive: true, force: true });
     rmSync(indexDir, { recursive: true, force: true });
   }
 });
 
-test("before_agent_start: stale indexed HEAD appends no guidance", async () => {
+test("before_agent_start: stale indexed HEAD appends persona only", async () => {
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo, git } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
   try {
-    const pi = fakePi();
-    ext(pi as any);
     await pi.fire("session_start", {}, noopCtx(repo));
 
     assert.ok(
@@ -284,14 +299,16 @@ test("before_agent_start: stale indexed HEAD appends no guidance", async () => {
     git(["add", "."]);
     git(["commit", "-qm", "second"]);
 
-    const noGuidance = await pi.fire(
+    const result = await pi.fire(
       "before_agent_start",
       promptEvent("investigate why navigator is rarely used in gridstrong"),
       undefined,
     );
-    assert.equal(noGuidance, undefined);
-    await pi.fire("session_shutdown", {}, undefined);
+    assert.ok(result);
+    assert.match(result.systemPrompt, new RegExp(PERSONA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(result.systemPrompt, new RegExp(NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   } finally {
+    await pi.fire("session_shutdown", {}, undefined);
     restore();
     rmSync(repo, { recursive: true, force: true });
     rmSync(indexDir, { recursive: true, force: true });
@@ -302,9 +319,9 @@ test("before_agent_start: readiness errors fail quiet", async () => {
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
   try {
-    const pi = fakePi();
-    ext(pi as any);
     await pi.fire("session_start", {}, noopCtx(repo));
 
     assert.ok(
@@ -326,8 +343,120 @@ test("before_agent_start: readiness errors fail quiet", async () => {
       undefined,
     );
     assert.equal(noGuidance, undefined);
-    await pi.fire("session_shutdown", {}, undefined);
   } finally {
+    await pi.fire("session_shutdown", {}, undefined);
+    restore();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(indexDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// grep-block hook (tool_call)
+// ---------------------------------------------------------------------------
+
+function bashToolCallEvent(command: string) {
+  return { type: "tool_call", toolName: "bash", toolCallId: "tc-1", input: { command } };
+}
+
+const noopUiCtx = { ui: { notify() {}, setStatus() {} } };
+
+test("grep-block: recursive grep is blocked when navigator is ready", async () => {
+  const indexDir = mkdtempSync(join(tmpdir(), "nav-grepblock-idx-"));
+  const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
+  const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
+  try {
+    await pi.fire("session_start", {}, noopCtx(repo));
+    await waitForPromptResult(pi, { prompt: "orient", systemPrompt: "", systemPromptOptions: { selectedTools: ["navigator_locate"] } });
+
+    const result = await pi.fire("tool_call", bashToolCallEvent(`grep -r FleetReadiness ${repo}`), noopUiCtx);
+    assert.ok(result, "should be blocked");
+    assert.equal(result.block, true);
+    assert.match(result.reason, /rg|navigator_locate/i);
+  } finally {
+    await pi.fire("session_shutdown", {}, undefined);
+    restore();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(indexDir, { recursive: true, force: true });
+  }
+});
+
+test("grep-block: repo-scan grep is allowed when navigator is not ready", async () => {
+  const indexDir = mkdtempSync(join(tmpdir(), "nav-grepblock-idx-"));
+  const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
+  const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
+  try {
+    // No session_start: repoStatus stays "booting", navigatorActive is false.
+    // The activation guard must allow the command rather than block where we
+    // cannot offer the index as an alternative.
+    const result = await pi.fire("tool_call", bashToolCallEvent(`grep -r foo ${repo}`), noopUiCtx);
+    assert.equal(result, undefined, "repo-scan grep allowed when navigator inactive");
+  } finally {
+    await pi.fire("session_shutdown", {}, undefined);
+    restore();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(indexDir, { recursive: true, force: true });
+  }
+});
+
+test("grep-block: piped grep is always allowed", async () => {
+  const indexDir = mkdtempSync(join(tmpdir(), "nav-grepblock-idx-"));
+  const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
+  const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
+  try {
+    await pi.fire("session_start", {}, noopCtx(repo));
+    await waitForPromptResult(pi, { prompt: "orient", systemPrompt: "", systemPromptOptions: { selectedTools: ["navigator_locate"] } });
+
+    const result = await pi.fire("tool_call", bashToolCallEvent("ps aux | grep node"), noopUiCtx);
+    assert.equal(result, undefined, "piped grep should be allowed (returns undefined)");
+  } finally {
+    await pi.fire("session_shutdown", {}, undefined);
+    restore();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(indexDir, { recursive: true, force: true });
+  }
+});
+
+test("grep-block: single-file grep is allowed", async () => {
+  const indexDir = mkdtempSync(join(tmpdir(), "nav-grepblock-idx-"));
+  const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
+  const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
+  try {
+    await pi.fire("session_start", {}, noopCtx(repo));
+    await waitForPromptResult(pi, { prompt: "orient", systemPrompt: "", systemPromptOptions: { selectedTools: ["navigator_locate"] } });
+
+    const result = await pi.fire("tool_call", bashToolCallEvent(`grep foo ${join(repo, "grid.rb")}`), noopUiCtx);
+    assert.equal(result, undefined, "single-file grep should be allowed");
+  } finally {
+    await pi.fire("session_shutdown", {}, undefined);
+    restore();
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(indexDir, { recursive: true, force: true });
+  }
+});
+
+test("grep-block: disabled via config grepBlock:false", async () => {
+  const indexDir = mkdtempSync(join(tmpdir(), "nav-grepblock-idx-"));
+  const { restore } = withAgentSettings({ indexDir, languages: ["ruby"], grepBlock: false });
+  const { repo } = gitRepoWithCommit();
+  const pi = fakePi();
+  ext(pi as any);
+  try {
+    await pi.fire("session_start", {}, noopCtx(repo));
+    await waitForPromptResult(pi, { prompt: "orient", systemPrompt: "", systemPromptOptions: { selectedTools: ["navigator_locate"] } });
+
+    const result = await pi.fire("tool_call", bashToolCallEvent(`grep -r foo ${repo}`), noopUiCtx);
+    assert.equal(result, undefined, "grep should be allowed when grepBlock is false");
+  } finally {
+    await pi.fire("session_shutdown", {}, undefined);
     restore();
     rmSync(repo, { recursive: true, force: true });
     rmSync(indexDir, { recursive: true, force: true });

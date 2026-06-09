@@ -4,7 +4,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { registerTools, type NavigatorCtx } from "./tools.ts";
+import { registerTools, renderLocateText, type NavigatorCtx } from "./tools.ts";
+import { STRONG_HIT_DIRECTIVE } from "./navigator/strong-hit.ts";
+import type { LocateResponse } from "./types.ts";
 import { openDb } from "./store/db.ts";
 import { migrate } from "./store/schema.ts";
 import { initParsers } from "./indexer/symbols.ts";
@@ -16,6 +18,61 @@ function fakePi() {
   const tools: any[] = [];
   return { tools, registerTool: (d: any) => tools.push(d) };
 }
+
+function makeLocateResponse(overrides: Partial<LocateResponse> = {}): LocateResponse {
+  return {
+    results: [{
+      path: "src/foo.ts", lang: "ts", score: 0.9,
+      signals: { fts: 0.5, path: 0.2, symbol: 0.2, recency: 0 },
+      symbols: [{ name: "Foo", kind: "class", lines: [1, 10] }],
+    }],
+    cluster: null,
+    index: { fresh: true, head_behind: 0, coverage: 1, dirty: false },
+    confidence: "high",
+    has_exact_def: true,
+    used_or_fallback: false,
+    top_has_anchor: true,
+    ...overrides,
+  };
+}
+
+test("renderLocateText: strong hit includes STRONG_HIT_DIRECTIVE", () => {
+  const res = makeLocateResponse();
+  const text = renderLocateText(res, "Foo", true);
+  assert.ok(text.includes(STRONG_HIT_DIRECTIVE), `expected directive in: ${text}`);
+});
+
+test("renderLocateText: strong hit with strongHitDirective=false suppresses directive", () => {
+  const res = makeLocateResponse();
+  const text = renderLocateText(res, "Foo", false);
+  assert.ok(!text.includes(STRONG_HIT_DIRECTIVE), `expected no directive in: ${text}`);
+});
+
+test("renderLocateText: low-confidence result has low-confidence line, not strong-hit directive", () => {
+  const res = makeLocateResponse({
+    confidence: "low",
+    has_exact_def: false,
+    top_has_anchor: false,
+  });
+  const text = renderLocateText(res, "Foo", true);
+  assert.ok(text.includes("low-confidence"), `expected low-confidence in: ${text}`);
+  assert.ok(!text.includes(STRONG_HIT_DIRECTIVE), `strong-hit directive must not appear: ${text}`);
+});
+
+test("navigator_locate guidelines contain strong-hit/slice reinforcement", () => {
+  const pi = fakePi();
+  registerTools(pi, () => null, () => "non_git");
+  const locateTool = pi.tools.find((t: any) => t.name === "navigator_locate");
+  const guidelines = (locateTool.promptGuidelines as string[]).join(" ");
+  assert.ok(
+    guidelines.includes("has_exact_def") && guidelines.includes("top_has_anchor"),
+    "must mention strong-hit signals in guidelines",
+  );
+  assert.ok(
+    guidelines.includes("navigator_slice") && guidelines.includes("redundant"),
+    "must mention slice-direct + redundant re-search",
+  );
+});
 
 test("navigator_locate guidelines contain navigator-first lead and rg boundary clause", () => {
   const pi = fakePi();

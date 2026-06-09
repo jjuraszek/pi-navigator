@@ -1,5 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { classifyGrepCommand, decideGrepAction } from "./src/grep-guard.ts";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { toRepoRel } from "./src/paths.ts";
@@ -20,6 +23,18 @@ import { openTelemetryDb } from "./src/telemetry/db.ts";
 import { TelemetryCorrelator } from "./src/telemetry/correlator.ts";
 import { aggregate } from "./src/telemetry/stats.ts";
 import type { Db } from "./src/store/db.ts";
+
+/**
+ * Resolve whether a path argument names a directory. Falls back to a syntactic
+ * guess when the path can't be stat'd (e.g. relative to a cwd we don't probe).
+ */
+function grepProbeDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return p === "." || p === ".." || p.endsWith("/");
+  }
+}
 
 /** Footer label for the current indexing coverage. */
 function statusLabel(cov: Coverage): string {
@@ -47,9 +62,52 @@ export default function (pi: ExtensionAPI): void {
   let correlator: TelemetryCorrelator | null = null;
   let telemetryDb: Db | null = null;
   let currentSessionId: string | null = null;
+  let rgAvailable: boolean | undefined;
+  let rgWarnedOnce = false;
 
   // Register tools and command at load-time with late-bound state getters.
   registerTools(pi, () => state, () => repoStatus);
+  pi.on("tool_call", async (event, ctx) => {
+    if (!config.grepBlock) return;
+    if (!isToolCallEventType("bash", event)) return;
+
+    // Classify first: non-grep commands (cd, npm, …) and non-repo-scan greps
+    // return immediately, so the rg probe and block logic never run for them.
+    const classification = classifyGrepCommand(event.input.command, grepProbeDir);
+    if (!classification.isRepoScan) return;
+
+    const navigatorActive = repoStatus === "ready" && state !== null;
+
+    if (rgAvailable === undefined) {
+      try {
+        execFileSync("rg", ["--version"], { stdio: "ignore" });
+        rgAvailable = true;
+      } catch {
+        rgAvailable = false;
+      }
+    }
+
+    const decision = decideGrepAction({
+      command: event.input.command,
+      probeDir: grepProbeDir,
+      rgAvailable,
+      navigatorActive,
+      classification,
+    });
+
+    if (decision.warn && !rgWarnedOnce) {
+      rgWarnedOnce = true;
+      ctx?.ui?.notify(
+        "rg not found \u2014 navigator grep block degraded to warn-only; install ripgrep for faster search",
+        "warning",
+      );
+    }
+    if (decision.action === "block") {
+      return { block: true, reason: decision.reason };
+    }
+    return undefined;
+  });
+
   registerNavigatorCommand(pi, () => ({
     active: rolling !== null,
     coverage: rolling?.coverage ?? null,
@@ -220,6 +278,8 @@ export default function (pi: ExtensionAPI): void {
       const guidance = buildNavigatorPromptGuidance({
         prompt: event.prompt ?? "",
         persona,
+        enablePersona: config.persona,
+        enableNudge: config.promptNudge,
         readiness: {
           repoResolved: true,
           selectedTools: event.systemPromptOptions?.selectedTools,
@@ -257,6 +317,10 @@ export default function (pi: ExtensionAPI): void {
     repoStatus = "booting";
     dbPathForStatus = "";
     ui = null;
+    // Re-probe rg next session: it may be installed/removed between sessions,
+    // and the degraded-mode warning should be eligible to fire once again.
+    rgAvailable = undefined;
+    rgWarnedOnce = false;
     pendingArgs.clear();
   });
 }

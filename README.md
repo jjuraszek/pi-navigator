@@ -28,6 +28,10 @@ A slice already read this session is flagged `unchanged_since_last_read: true` w
 
 ---
 
+## Prerequisites
+
+- **`rg` (ripgrep) on `PATH`** — required. Navigator treats ripgrep as the sanctioned raw-search tool: the grep block (see [Configuration](#configuration) → `grepBlock`) redirects slow repo-scanning shell `grep` to `rg`. If `rg` is absent the block degrades to a one-time warning and never fires, but recall-fallback guidance still assumes `rg` is present. Install: `brew install ripgrep` / `apt-get install -y ripgrep` / `cargo install ripgrep`.
+
 ## Install
 
 pi-navigator is a private repository. Install requires git SSH access to `jjuraszek/pi-navigator`.
@@ -105,7 +109,11 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
     "cochangeWindowDays": 180,
     "cochangeMaxCommits": 4000,
     "cochangeMaxFilesPerCommit": 50,
-    "maxFileBytes": 1048576
+    "maxFileBytes": 1048576,
+    "persona": true,
+    "promptNudge": true,
+    "strongHitDirective": true,
+    "grepBlock": true
   }
 }
 ```
@@ -122,8 +130,12 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 | `cochangeMaxCommits` | `4000` | Commit scan bound for co-change. |
 | `cochangeMaxFilesPerCommit` | `50` | Skip mega-commits for co-change (still counted for recency). |
 | `maxFileBytes` | `1048576` | Files larger than this are skipped. |
+| `persona` | `true` | Always-on orientation line in the system prompt while the index is usable (`coverage.indexed > 0`, worker healthy) — fires even on a dirty or behind-HEAD worktree. Set `false` to suppress. |
+| `promptNudge` | `true` | Per-prompt orientation nudge; gated on a fresh index (complete, current, clean) **and** an orientation-style prompt. Set `false` to suppress. |
+| `strongHitDirective` | `true` | Appends a "slice rank 1, don't re-search" directive to `navigator_locate` output on a high-confidence exact match. Set `false` to suppress. |
+| `grepBlock` | `true` | Blocks slow repo-scanning shell `grep` (recursive or directory path) via the bash hook, redirecting to `rg`/`navigator_locate`. Pipes, stdin, single-file grep, and `git grep` are always allowed; auto-disabled when `rg` is absent. Set `false` to disable. |
 
-Prompt guidance is automatic when navigator is enabled, `navigator_locate` is selected, and the index is complete, current, and clean for the active worktree. Broad repo-orientation prompts get a short additional nudge; exact-path and external-only prompts do not. `navigator.injectPersona` is ignored and no longer a supported behavior switch. Use `/navigator status` to inspect readiness.
+Prompt guidance is two-tier. The **persona** line (`persona`) fires whenever navigator is enabled, `navigator_locate` is selected, and the index is merely *usable* — it stays on for a dirty or behind-HEAD worktree, so orientation help survives active editing. The per-prompt **nudge** (`promptNudge`) is stricter: it needs a fresh index (complete, current, clean) **and** a broad repo-orientation prompt; exact-path and external-only prompts get no nudge. `navigator.injectPersona` is ignored and no longer a supported behavior switch. Use `/navigator status` to inspect readiness.
 
 ---
 

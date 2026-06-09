@@ -8,6 +8,7 @@ import {
   hasExactLocalPath,
   isExternalOnlyPrompt,
   isNavigatorPromptGuidanceReady,
+  personaUsable,
 } from "./prompt-guidance.ts";
 
 const broadPromptCases = [
@@ -219,6 +220,8 @@ test("buildNavigatorPromptGuidance: ready broad prompt returns persona and nudge
       prompt: broadPromptCases[0],
       persona,
       readiness: readyFacts,
+      enablePersona: true,
+      enableNudge: true,
     }),
     [persona, NAVIGATOR_PROMPT_NUDGE],
   );
@@ -230,12 +233,15 @@ test("buildNavigatorPromptGuidance: ready exact-path prompt returns persona only
       prompt: exactPathCases[0],
       persona,
       readiness: readyFacts,
+      enablePersona: true,
+      enableNudge: true,
     }),
     [persona],
   );
 });
 
-test("buildNavigatorPromptGuidance: not-ready prompt returns empty array", () => {
+test("buildNavigatorPromptGuidance: partial index fires persona but not nudge", () => {
+  // Persona fires (indexed > 0 = usable); nudge stays silent (not fresh).
   assert.deepEqual(
     buildNavigatorPromptGuidance({
       prompt: broadPromptCases[0],
@@ -244,6 +250,21 @@ test("buildNavigatorPromptGuidance: not-ready prompt returns empty array", () =>
         ...readyFacts,
         coverage: { total: 10, indexed: 5 },
       },
+      enablePersona: true,
+      enableNudge: true,
+    }),
+    [persona],
+  );
+});
+
+test("buildNavigatorPromptGuidance: both disabled returns empty array", () => {
+  assert.deepEqual(
+    buildNavigatorPromptGuidance({
+      prompt: broadPromptCases[0],
+      persona,
+      readiness: readyFacts,
+      enablePersona: false,
+      enableNudge: false,
     }),
     [],
   );
@@ -255,7 +276,84 @@ test("buildNavigatorPromptGuidance: blank persona still returns nudge for ready 
       prompt: broadPromptCases[0],
       persona: "   ",
       readiness: readyFacts,
+      enablePersona: true,
+      enableNudge: true,
     }),
     [NAVIGATOR_PROMPT_NUDGE],
+  );
+});
+
+// Two-tier tests
+
+const usableDirty: NavigatorPromptReadinessFacts = {
+  repoResolved: true,
+  selectedTools: ["navigator_locate"],
+  coverage: { total: 100, indexed: 40 },
+  fullCrawlDone: false,
+  indexedHead: "abc",
+  currentHead: "def",
+  dirty: true,
+  workerFailed: false,
+};
+
+test("personaUsable: fires when dirty/behind/partial as long as indexed > 0", () => {
+  assert.equal(personaUsable(usableDirty), true);
+});
+
+test("personaUsable: false when nothing indexed", () => {
+  assert.equal(personaUsable({ ...usableDirty, coverage: { total: 100, indexed: 0 } }), false);
+});
+
+test("personaUsable: false when worker failed / tool unselected", () => {
+  assert.equal(personaUsable({ ...usableDirty, workerFailed: true }), false);
+  assert.equal(personaUsable({ ...usableDirty, selectedTools: [] }), false);
+  assert.equal(personaUsable({ ...usableDirty, selectedTools: undefined }), false);
+  assert.equal(personaUsable({ ...usableDirty, repoResolved: false }), false);
+});
+
+test("persona fires but nudge suppressed on a dirty/partial index", () => {
+  const g = buildNavigatorPromptGuidance({
+    prompt: "where is the readiness presenter",
+    persona: "PERSONA",
+    readiness: usableDirty,
+    enablePersona: true,
+    enableNudge: true,
+  });
+  assert.deepEqual(g, ["PERSONA"]);
+});
+
+test("nudge appended only when fresh gate passes and prompt is orientation", () => {
+  const fresh: NavigatorPromptReadinessFacts = {
+    ...usableDirty,
+    coverage: { total: 100, indexed: 100 },
+    fullCrawlDone: true,
+    currentHead: "abc",
+    dirty: false,
+  };
+  const g = buildNavigatorPromptGuidance({
+    prompt: "where is the readiness presenter",
+    persona: "PERSONA",
+    readiness: fresh,
+    enablePersona: true,
+    enableNudge: true,
+  });
+  assert.deepEqual(g, ["PERSONA", NAVIGATOR_PROMPT_NUDGE]);
+});
+
+test("config flags gate each tier independently", () => {
+  const fresh: NavigatorPromptReadinessFacts = {
+    ...usableDirty,
+    coverage: { total: 100, indexed: 100 },
+    fullCrawlDone: true,
+    currentHead: "abc",
+    dirty: false,
+  };
+  assert.deepEqual(
+    buildNavigatorPromptGuidance({ prompt: "where is x", persona: "P", readiness: fresh, enablePersona: false, enableNudge: true }),
+    [NAVIGATOR_PROMPT_NUDGE],
+  );
+  assert.deepEqual(
+    buildNavigatorPromptGuidance({ prompt: "where is x", persona: "P", readiness: fresh, enablePersona: true, enableNudge: false }),
+    ["P"],
   );
 });

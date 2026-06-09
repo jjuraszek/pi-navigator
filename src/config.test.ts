@@ -98,3 +98,30 @@ test("mergeConfig: telemetry: true overrides default", () => {
   assert.equal(merged.telemetryTurnCap, 10);
   assert.equal(merged.telemetryRetentionDays, 30);
 });
+
+test("new adoption keys default to true", () => {
+  const c = mergeConfig({});
+  assert.equal(c.persona, true);
+  assert.equal(c.promptNudge, true);
+  assert.equal(c.strongHitDirective, true);
+  assert.equal(c.grepBlock, true);
+});
+
+test("new adoption keys honor explicit false", () => {
+  const c = mergeConfig({ persona: false, promptNudge: false, strongHitDirective: false, grepBlock: false });
+  assert.equal(c.persona, false);
+  assert.equal(c.promptNudge, false);
+  assert.equal(c.strongHitDirective, false);
+  assert.equal(c.grepBlock, false);
+});
+
+test("non-boolean adoption keys fall back to default true", () => {
+  const c = mergeConfig({ persona: "yes" as unknown as boolean, grepBlock: 1 as unknown as boolean });
+  assert.equal(c.persona, true);
+  assert.equal(c.grepBlock, true);
+});
+
+test("unknown keys are still dropped", () => {
+  const c = mergeConfig({ injectPersona: true } as Record<string, unknown>);
+  assert.equal("injectPersona" in c, false);
+});

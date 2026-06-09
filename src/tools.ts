@@ -1,15 +1,57 @@
 import { Type } from "typebox";
 import { locate } from "./navigator/locate.ts";
 import { slice } from "./navigator/slice.ts";
+import { isStrongHit, STRONG_HIT_DIRECTIVE } from "./navigator/strong-hit.ts";
 import { VerifiedCache } from "./navigator/verified-cache.ts";
 import type { Db } from "./store/db.ts";
-import type { NavigatorConfig, RepoStatus } from "./types.ts";
+import type { LocateResponse, NavigatorConfig, RepoStatus } from "./types.ts";
 
 export interface NavigatorCtx {
   db: Db;
   root: string;
   cache: VerifiedCache;
   config: NavigatorConfig;
+}
+
+export function renderLocateText(res: LocateResponse, query: string, strongHitDirectiveEnabled: boolean): string {
+  const lines: string[] = [];
+  if (res.results.length === 0) {
+    lines.push("No results found — navigator may not cover this query. Fall back to rg/fd/read before concluding it doesn't exist.");
+  } else {
+    lines.push(`Found ${res.results.length} result(s) for "${query}":`);
+    for (const r of res.results) {
+      lines.push(`  ${r.path} (score: ${r.score.toFixed(2)}, lang: ${r.lang ?? "?"})`);
+      if (r.symbols.length > 0) {
+        lines.push(`    symbols: ${r.symbols.map((s) => s.name).join(", ")}`);
+      }
+    }
+    if (res.cluster) {
+      if (res.cluster.cochange.length > 0) {
+        lines.push(`  co-changes: ${res.cluster.cochange.join(", ")}`);
+      }
+      if (res.cluster.referrers.length > 0) {
+        lines.push(`  referrers: ${res.cluster.referrers.join(", ")}`);
+      }
+    }
+  }
+  if (res.index.dirty) {
+    lines.push("  [working tree has uncommitted edits — slices read live bytes, but locate ranking may lag; the writer refreshes in the background]");
+  }
+  if (res.index.coverage < 1) {
+    lines.push(`  [index coverage: ${Math.round(res.index.coverage * 100)}% — still building; some files may be missing]`);
+  }
+  if (res.index.head_behind > 0) {
+    lines.push(`  [index is ${res.index.head_behind} commit(s) behind HEAD — may miss very recent changes; refreshing in background]`);
+  }
+  if (res.results.length > 0 && res.confidence === "low") {
+    lines.push(
+      "  [low-confidence: query terms don't co-occur in one file, or the top hit has no symbol/path anchor — verify the top candidate by reading it, or fall back to rg/find/read]",
+    );
+  }
+  if (strongHitDirectiveEnabled && isStrongHit(res)) {
+    lines.push(STRONG_HIT_DIRECTIVE);
+  }
+  return lines.join("\n");
 }
 
 export interface PiLike {
@@ -44,6 +86,7 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null, get
       "Use rg only for regex matching or scanning full file contents across many files; use navigator_locate to find where something lives or what relates to it.",
       "Results are ranked candidates, not verified answers. Before asserting a file is THE place for a 'where is X / where do I start' query, open the top candidate (read or navigator_slice) to confirm — ranking is by signals, not by reading the code.",
       "If the result is flagged low-confidence (terms don't co-occur, or no symbol/path anchor matched), do NOT trust the top hit blindly: fall back to rg/find/read or refine the query.",
+      "When navigator_locate returns a high-confidence exact match (has_exact_def + top_has_anchor), use navigator_slice on the rank-1 result directly — re-running rg/grep/read to re-find the same symbol is redundant.",
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Name, symbol, or description to search for" }),
@@ -67,44 +110,8 @@ export function registerTools(pi: PiLike, getCtx: () => NavigatorCtx | null, get
       };
       const res = locate(navCtx.db, navCtx.root, params.query, config);
 
-      // Produce a concise text summary
-      const lines: string[] = [];
-      if (res.results.length === 0) {
-        lines.push("No results found — navigator may not cover this query. Fall back to rg/fd/read before concluding it doesn't exist.");
-      } else {
-        lines.push(`Found ${res.results.length} result(s) for "${params.query}":`);
-        for (const r of res.results) {
-          lines.push(`  ${r.path} (score: ${r.score.toFixed(2)}, lang: ${r.lang ?? "?"}`);
-          if (r.symbols.length > 0) {
-            lines.push(`    symbols: ${r.symbols.map((s) => s.name).join(", ")}`);
-          }
-        }
-        if (res.cluster) {
-          if (res.cluster.cochange.length > 0) {
-            lines.push(`  co-changes: ${res.cluster.cochange.join(", ")}`);
-          }
-          if (res.cluster.referrers.length > 0) {
-            lines.push(`  referrers: ${res.cluster.referrers.join(", ")}`);
-          }
-        }
-      }
-      if (res.index.dirty) {
-        lines.push("  [working tree has uncommitted edits — slices read live bytes, but locate ranking may lag; the writer refreshes in the background]");
-      }
-      if (res.index.coverage < 1) {
-        lines.push(`  [index coverage: ${Math.round(res.index.coverage * 100)}% — still building; some files may be missing]`);
-      }
-      if (res.index.head_behind > 0) {
-        lines.push(`  [index is ${res.index.head_behind} commit(s) behind HEAD — may miss very recent changes; refreshing in background]`);
-      }
-      if (res.results.length > 0 && res.confidence === "low") {
-        lines.push(
-          "  [low-confidence: query terms don't co-occur in one file, or the top hit has no symbol/path anchor — verify the top candidate by reading it, or fall back to rg/find/read]",
-        );
-      }
-
       return {
-        content: [{ type: "text" as const, text: lines.join("\n") }],
+        content: [{ type: "text" as const, text: renderLocateText(res, params.query, config.strongHitDirective !== false) }],
         details: res,
       };
     },

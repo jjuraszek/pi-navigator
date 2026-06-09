@@ -4,6 +4,15 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Added
+- **Two-tier prompt guidance.** Split the single readiness-gated nudge into an always-on **persona** tier and a freshness-gated **nudge** tier. The persona fires whenever the index is merely *usable* (`coverage.indexed > 0`, worker healthy, `navigator_locate` selected) — including dirty or behind-HEAD worktrees — so orientation help survives active editing. The per-prompt nudge still requires a complete/current/clean index **and** an orientation-style prompt. Motivated by telemetry showing the old single gate stayed silent in active repos (the cases that need it most).
+- **Strong-hit directive.** On a high-confidence exact match (`has_exact_def` + top-result anchor), `navigator_locate` output appends a "slice rank 1 directly; re-running rg/grep/read is redundant" directive, reinforced by a `promptGuidelines` bullet — targets the observed locate-then-flail pattern.
+- **Shell-grep block.** A `tool_call` hook blocks slow repo-scanning shell `grep` (recursive or directory path) and redirects to `rg`/`navigator_locate`. Pipes, stdin, single-file grep, and `git grep` are always allowed; the block is skipped when navigator is inactive and degrades to a one-time warning when `rg` is absent. The built-in `grep` tool (already ripgrep-backed) is unaffected.
+- **Config keys** (all default `true`, each with an opt-out): `persona`, `promptNudge`, `strongHitDirective`, `grepBlock`.
+
+### Changed
+- **README** documents `rg` (ripgrep) as a prerequisite and the four new config keys.
+
 ## [v0.7.0] - 2026-06-07
 
 - **Prompt guidance:** navigator now injects automatic readiness-gated repo-orientation guidance when `navigator_locate` is selected and the index is complete/current/clean; `navigator.injectPersona` is no longer a behavior switch.

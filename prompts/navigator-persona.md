@@ -1,1 +1,1 @@
-Repo orientation rule: when a task requires finding code/docs and no exact path is already known, call `navigator_locate` once before broad `rg`/`find`/`read`; use `rg` for regex or full-content scans.
+Repo orientation: a navigator index (`navigator_locate` / `navigator_slice`) is available. Prefer it for first orientation — where code or docs live, what changes together, who references a file — before broad `rg`/`find`/`read`. Slices read live working-tree bytes; the ranking index may lag recent edits, so verify with `rg`/`fd`/`read` when a result looks stale.
