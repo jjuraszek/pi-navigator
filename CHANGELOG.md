@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-06-09
+
 ### Added
 - **Two-tier prompt guidance.** Split the single readiness-gated nudge into an always-on **persona** tier and a freshness-gated **nudge** tier. The persona fires whenever the index is merely *usable* (`coverage.indexed > 0`, worker healthy, `navigator_locate` selected) — including dirty or behind-HEAD worktrees — so orientation help survives active editing. The per-prompt nudge still requires a complete/current/clean index **and** an orientation-style prompt. Motivated by telemetry showing the old single gate stayed silent in active repos (the cases that need it most).
 - **Strong-hit directive.** On a high-confidence exact match (`has_exact_def` + top-result anchor), `navigator_locate` output appends a "slice rank 1 directly; re-running rg/grep/read is redundant" directive, reinforced by a `promptGuidelines` bullet — targets the observed locate-then-flail pattern.
