@@ -30,7 +30,17 @@ A slice already read this session is flagged `unchanged_since_last_read: true` w
 
 ## Prerequisites
 
-- **`rg` (ripgrep) on `PATH`** — required. Navigator treats ripgrep as the sanctioned raw-search tool: the grep block (see [Configuration](#configuration) → `grepBlock`) redirects slow repo-scanning shell `grep` to `rg`. If `rg` is absent the block degrades to a one-time warning and never fires, but recall-fallback guidance still assumes `rg` is present. Install: `brew install ripgrep` / `apt-get install -y ripgrep` / `cargo install ripgrep`.
+- **`rg` (ripgrep) on `PATH`** — required. Navigator treats ripgrep as the sanctioned raw-search tool: the grep block (see [Configuration](#configuration) -> `grepBlock`) redirects slow repo-scanning shell `grep` to `rg`. If `rg` is absent the block degrades to a one-time warning and never fires, but recall-fallback guidance still assumes `rg` is present. Install: `brew install ripgrep` / `apt-get install -y ripgrep` / `cargo install ripgrep`.
+
+- **Agent instruction files** (user-global `~/.pi/agent/AGENTS.md`, `CLAUDE.md`, or equivalent) should not contain a blanket search-tool preference such as `"prefer rg/fd"` with no navigator mention. Navigator owns search-tool routing where installed; a blanket `rg`/`fd` instruction suppresses adoption by overriding the per-prompt guidance. Use the per-repo snippet below instead.
+
+### Optional per-repo AGENTS.md snippet
+
+Add to your project's `AGENTS.md` (or equivalent agent-instruction file) to make navigator the first-call search tool:
+
+```
+Repo orientation: prefer `navigator_locate` for finding where code or docs live before broad rg/find/read; use rg/fd for regex or content scans, and as fallback when navigator is unavailable.
+```
 
 ## Install
 
@@ -131,11 +141,11 @@ Settings go under the `navigator` key in your pi agent settings (`$PI_CODING_AGE
 | `cochangeMaxFilesPerCommit` | `50` | Skip mega-commits for co-change (still counted for recency). |
 | `maxFileBytes` | `1048576` | Files larger than this are skipped. |
 | `persona` | `true` | Always-on orientation line in the system prompt while the index is usable (`coverage.indexed > 0`, worker healthy) — fires even on a dirty or behind-HEAD worktree. Set `false` to suppress. |
-| `promptNudge` | `true` | Per-prompt orientation nudge; gated on a fresh index (complete, current, clean) **and** an orientation-style prompt. Set `false` to suppress. |
+| `promptNudge` | `true` | Per-prompt orientation directive; fires whenever `navigator_locate` is selected and the prompt is orientation-style. Index state picks the tier (strong when coverage >= 90% and the full crawl is done, weak otherwise) and adds caveats (booting / ranking-lag); it never suppresses the directive. Exact-path and external-only prompts get no directive. Set `false` to suppress. |
 | `strongHitDirective` | `true` | Appends a "slice rank 1, don't re-search" directive to `navigator_locate` output on a high-confidence exact match. Set `false` to suppress. |
 | `grepBlock` | `true` | Blocks slow repo-scanning shell `grep` (recursive or directory path) via the bash hook, redirecting to `rg`/`navigator_locate`. Pipes, stdin, single-file grep, and `git grep` are always allowed; auto-disabled when `rg` is absent. Set `false` to disable. |
 
-Prompt guidance is two-tier. The **persona** line (`persona`) fires whenever navigator is enabled, `navigator_locate` is selected, and the index is merely *usable* — it stays on for a dirty or behind-HEAD worktree, so orientation help survives active editing. The per-prompt **nudge** (`promptNudge`) is stricter: it needs a fresh index (complete, current, clean) **and** a broad repo-orientation prompt; exact-path and external-only prompts get no nudge. `navigator.injectPersona` is ignored and no longer a supported behavior switch. Use `/navigator status` to inspect readiness.
+Prompt guidance has two independent parts. The **persona** line (`persona`) fires whenever navigator is enabled, `navigator_locate` is selected, and the index is merely *usable* (`coverage.indexed > 0`, worker healthy) - it stays on for a dirty or behind-HEAD worktree, so orientation help survives active editing; it is suppressed only while nothing is indexed yet. The per-prompt **directive** (`promptNudge`) is **availability-gated**, not freshness-gated: given `navigator_locate` selected and a broad repo-orientation prompt, it always fires, with index state choosing a strong vs weak tier and appending booting / ranking-lag caveats rather than suppressing. Exact-path and external-only prompts get no directive. `navigator.injectPersona` is ignored and no longer a supported behavior switch. Use `/navigator status` to inspect readiness.
 
 ---
 

@@ -29,17 +29,35 @@ function extractPattern(tool: SearchTool, rest: string): string | null {
   return null;
 }
 
+interface Segment {
+  text: string;
+  // true when this segment was reached via a single `|` (pipe-downstream = filter, not a search)
+  piped: boolean;
+}
+
 /**
  * Split a shell command string into segments on unquoted &&, ||, ;, |, newlines.
  * Quoted regions (single or double quotes) are treated as opaque.
- * $(...) and heredocs are best-effort/opaque.
+ * Each segment carries a `piped` flag: true only when preceded by a single `|`.
+ * Pipe-downstream segments are filters (e.g. `grep` in `ls | grep foo`);
+ * they must not be classified as standalone searches.
+ * Best-effort: tracks quote state but not backslash-escaped quotes; a \" inside a
+ * double-quoted region ends it early. Acceptable - the detector biases to allow and
+ * such patterns are rare. grep-guard.ts splitCommandSegments has the same limitation.
  */
-function splitSegments(command: string): string[] {
-  const segments: string[] = [];
+function splitSegments(command: string): Segment[] {
+  const segments: Segment[] = [];
   let seg = "";
+  let pipedInto = false;
   let inSingle = false;
   let inDouble = false;
   let i = 0;
+
+  const flush = (nextPiped: boolean) => {
+    if (seg.trim().length > 0) segments.push({ text: seg, piped: pipedInto });
+    seg = "";
+    pipedInto = nextPiped;
+  };
 
   while (i < command.length) {
     const ch = command[i];
@@ -72,17 +90,22 @@ function splitSegments(command: string): string[] {
       continue;
     }
 
-    // Check two-char operators before single-char |
+    // && and || are control operators - next segment is not pipe-downstream
     if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
-      segments.push(seg);
-      seg = "";
+      flush(false);
       i += 2;
       continue;
     }
 
-    if (ch === ";" || ch === "|" || ch === "\n") {
-      segments.push(seg);
-      seg = "";
+    if (ch === ";" || ch === "\n") {
+      flush(false);
+      i++;
+      continue;
+    }
+
+    // single `|` - next segment is pipe-downstream (a filter)
+    if (ch === "|") {
+      flush(true);
       i++;
       continue;
     }
@@ -91,14 +114,16 @@ function splitSegments(command: string): string[] {
     i++;
   }
 
-  if (seg.length > 0) segments.push(seg);
+  if (seg.trim().length > 0) segments.push({ text: seg, piped: pipedInto });
   return segments;
 }
 
 export function detectSearch(command: string): { tool: SearchTool; pattern: string } | null {
   for (const segment of splitSegments(command)) {
+    // skip pipe-downstream segments - they are output filters, not searches
+    if (segment.piped) continue;
     for (const { tool, re } of TOOL_PATTERNS) {
-      const m = segment.match(re);
+      const m = segment.text.match(re);
       if (m) {
         const pattern = extractPattern(tool, m[1]);
         if (pattern !== null) return { tool, pattern };

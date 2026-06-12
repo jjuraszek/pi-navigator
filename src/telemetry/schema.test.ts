@@ -124,11 +124,11 @@ test("pruneOld deletes stale rows and keeps fresh ones", () => {
   }
 });
 
-test("needsRebuild returns correct results", () => {
-  assert.equal(needsRebuild(0, 1), false, "version 0 (fresh) should not trigger rebuild");
-  assert.equal(needsRebuild(1, 2), true, "stored < current should trigger rebuild");
-  assert.equal(needsRebuild(2, 2), false, "stored == current should not trigger rebuild");
-  assert.equal(needsRebuild(1, 3), true, "stored far behind current should trigger rebuild");
+test("needsRebuild only rebuilds for pre-v2 stored versions", () => {
+  assert.equal(needsRebuild(0, 3), false);
+  assert.equal(needsRebuild(1, 3), true);
+  assert.equal(needsRebuild(2, 3), false);
+  assert.equal(needsRebuild(3, 3), false);
 });
 
 test("nav_consume has a cluster_kind column after migrate", () => {
@@ -174,6 +174,41 @@ test("nav_consume CHECK rejects row with both locate_rank and cluster_kind set",
   } finally {
     cleanup(dbPath);
   }
+});
+
+test("v2->v3 migration preserves nav_session rows (ALTER, not drop)", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const db = openDb(dbPath);
+    db.exec("CREATE TABLE IF NOT EXISTS tmeta (key TEXT PRIMARY KEY, value TEXT)");
+    db.exec("CREATE TABLE IF NOT EXISTS nav_session (session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, repo_root TEXT, head_sha TEXT, is_writer INTEGER DEFAULT 0, used_locate INTEGER DEFAULT 0)");
+    db.prepare("INSERT INTO nav_session (session_id, started_at) VALUES ('keep-me', 123)").run();
+    db.prepare("INSERT INTO tmeta (key, value) VALUES ('schema_version', '2')").run();
+    migrate(db);
+    const row = db.prepare("SELECT session_id, tools_selected FROM nav_session WHERE session_id = 'keep-me'").get() as Record<string, unknown> | undefined;
+    assert.ok(row, "v2 row must survive the v2->v3 migration");
+    assert.equal(row!.tools_selected, 0);
+    const ver = db.prepare("SELECT value FROM tmeta WHERE key='schema_version'").get() as { value: string } | undefined;
+    assert.equal(ver!.value, "3");
+  } finally { cleanup(dbPath); }
+});
+
+test("migrate creates nav_guard with the expected columns", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const db = openDb(dbPath); migrate(db);
+    const cols = (db.prepare("PRAGMA table_info(nav_guard)").all() as Array<{ name: string }>).map((c) => c.name);
+    for (const c of ["session_id", "ts", "action", "pattern_kind", "reason"]) assert.ok(cols.includes(c), `nav_guard missing ${c}`);
+  } finally { cleanup(dbPath); }
+});
+
+test("nav_session has tools_selected after a fresh migrate", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const db = openDb(dbPath); migrate(db);
+    const cols = (db.prepare("PRAGMA table_info(nav_session)").all() as Array<{ name: string }>).map((c) => c.name);
+    assert.ok(cols.includes("tools_selected"));
+  } finally { cleanup(dbPath); }
 });
 
 test("pruneOld removes orphaned nav_locate rows with no matching session", () => {

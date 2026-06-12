@@ -7,9 +7,10 @@ import { openDb } from "../store/db.ts";
 import { migrate } from "./schema.ts";
 import { TelemetryCorrelator } from "./correlator.ts";
 import type { CorrelatorOpts } from "./correlator.ts";
+import { insertGuard, markToolsSelected, ensureSession } from "./queries.ts";
 
 function makeTmpPath(): string {
-  return join(tmpdir(), `correlator-test-${process.pid}-${Date.now()}.db`);
+  return join(tmpdir(), `correlator-test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
 }
 
 function cleanup(path: string): void {
@@ -472,5 +473,58 @@ test("telemetry never throws after DB is closed: guard() swallows DB errors", ()
     assert.equal(threw, false, "TelemetryCorrelator must never propagate DB errors to the caller");
   } finally {
     cleanup(dbPath);
+  }
+});
+
+test("recordGuard inserts a nav_guard row with mapped action", () => {
+  const p = makeTmpPath();
+  try {
+    const db = openDb(p);
+    migrate(db);
+    db.prepare("INSERT INTO nav_session (session_id, started_at) VALUES ('s1', 1)").run();
+    insertGuard(db, { sessionId: "s1", ts: 10, action: "block", patternKind: "symbol", reason: "scan blocked" });
+    insertGuard(db, { sessionId: "s1", ts: 11, action: "warn", patternKind: null, reason: "rg missing" });
+    const rows = db.prepare("SELECT action, pattern_kind, reason FROM nav_guard WHERE session_id='s1' ORDER BY ts").all() as any[];
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].action, "block");
+    assert.equal(rows[0].pattern_kind, "symbol");
+    assert.equal(rows[0].reason, "scan blocked");
+    assert.equal(rows[1].action, "warn");
+    assert.equal(rows[1].pattern_kind, null);
+    assert.equal(rows[1].reason, "rg missing");
+  } finally {
+    cleanup(p);
+  }
+});
+
+test("correlator.recordGuard writes a nav_guard row for the session", () => {
+  const dbPath = makeTmpPath();
+  try {
+    const opts = makeOpts(dbPath);
+    const { db, dbPath: _p, ...corrOpts } = opts;
+    const c = new TelemetryCorrelator({ ...corrOpts, db });
+    c.recordGuard("block", "symbol", "some reason");
+    const row = db.prepare("SELECT action, pattern_kind, reason FROM nav_guard WHERE session_id = ?").get(corrOpts.sessionId) as any;
+    assert.ok(row, "nav_guard row should exist");
+    assert.equal(row.action, "block");
+    assert.equal(row.pattern_kind, "symbol");
+    assert.equal(row.reason, "some reason");
+  } finally {
+    cleanup(dbPath);
+  }
+});
+
+test("markToolsSelected updates nav_session.tools_selected", () => {
+  const p = makeTmpPath();
+  try {
+    const db = openDb(p);
+    migrate(db);
+    ensureSession(db, { sessionId: "s2", startedAt: 1, repoRoot: "/r", headSha: null, isWriter: false });
+    markToolsSelected(db, "s2", true);
+    assert.equal((db.prepare("SELECT tools_selected FROM nav_session WHERE session_id='s2'").get() as any).tools_selected, 1);
+    markToolsSelected(db, "s2", false);
+    assert.equal((db.prepare("SELECT tools_selected FROM nav_session WHERE session_id='s2'").get() as any).tools_selected, 0);
+  } finally {
+    cleanup(p);
   }
 });

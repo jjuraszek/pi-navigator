@@ -16,10 +16,54 @@ function stripQuotes(token: string): string {
   return token;
 }
 
-export function classifyGrepCommand(command: string, probeDir: (p: string) => boolean): GrepClassification {
+// Split on unquoted |, ;, &&, ||, \n, and lift $(...)/backtick bodies as sub-segments,
+// so flags from a following statement (e.g. `ls -R`) never leak into the grep classification.
+// Best-effort: tracks quote state but not backslash-escaped quotes; a \" inside a
+// double-quoted region ends it early. Acceptable - the guard biases to allow and such
+// patterns are rare. detect.ts splitSegments has the same limitation.
+function splitCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let seg = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+  const push = () => { if (seg.trim().length > 0) segments.push(seg); seg = ""; };
+  while (i < command.length) {
+    const ch = command[i]!;
+    if (inSingle) { seg += ch; if (ch === "'") inSingle = false; i++; continue; }
+    if (inDouble) { seg += ch; if (ch === '"') inDouble = false; i++; continue; }
+    if (ch === "'") { inSingle = true; seg += ch; i++; continue; }
+    if (ch === '"') { inDouble = true; seg += ch; i++; continue; }
+    if (ch === "$" && command[i + 1] === "(") {
+      // recurse into $(...) body so inner grep commands are classified independently
+      let depth = 1; let inner = ""; i += 2;
+      while (i < command.length && depth > 0) {
+        const c = command[i]!;
+        if (c === "(") depth++;
+        else if (c === ")") { depth--; if (depth === 0) { i++; break; } }
+        inner += c; i++;
+      }
+      for (const s of splitCommandSegments(inner)) segments.push(s);
+      continue;
+    }
+    if (ch === "`") {
+      let inner = ""; i++;
+      while (i < command.length && command[i] !== "`") { inner += command[i]!; i++; }
+      i++;
+      for (const s of splitCommandSegments(inner)) segments.push(s);
+      continue;
+    }
+    if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) { push(); i += 2; continue; }
+    if (ch === ";" || ch === "|" || ch === "\n") { push(); i++; continue; }
+    seg += ch; i++;
+  }
+  push();
+  return segments;
+}
+
+function classifySingleGrep(segment: string, probeDir: (p: string) => boolean): GrepClassification {
   const noScan: GrepClassification = { isRepoScan: false, patternKind: null };
-  const firstSegment = command.split("|")[0]!.trim();
-  const tokens = firstSegment.split(/\s+/).filter(Boolean);
+  const tokens = segment.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return noScan;
   if (tokens[0] === "git") return noScan;
   if (!GREP_HEAD_RE.test(tokens[0]!)) return noScan;
@@ -45,11 +89,21 @@ export function classifyGrepCommand(command: string, probeDir: (p: string) => bo
     paths.push(stripQuotes(tok));
   }
 
-  const scansDir = recursive || paths.some((p) => probeDir(p));
+  // -r/-R is a scan only when it targets a dir or has no path args (GNU grep then recurses cwd).
+  const scansDir = paths.some((p) => probeDir(p)) || (recursive && paths.length === 0);
   if (!scansDir) return noScan;
 
   const patternKind: GrepPatternKind = pattern !== null && SYMBOL_RE.test(pattern) ? "symbol" : "regex";
   return { isRepoScan: true, patternKind };
+}
+
+export function classifyGrepCommand(command: string, probeDir: (p: string) => boolean): GrepClassification {
+  const noScan: GrepClassification = { isRepoScan: false, patternKind: null };
+  for (const segment of splitCommandSegments(command)) {
+    const result = classifySingleGrep(segment, probeDir);
+    if (result.isRepoScan) return result;
+  }
+  return noScan;
 }
 
 export interface GrepActionInput {

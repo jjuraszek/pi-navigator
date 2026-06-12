@@ -22,6 +22,23 @@ export interface BuildNavigatorPromptGuidanceArgs {
 export const NAVIGATOR_PROMPT_NUDGE =
   "This request likely needs repo orientation. If no exact path is already known, call `navigator_locate` once before `rg`/`find`/`read`.";
 
+export const STRONG_COVERAGE_THRESHOLD = 0.9;
+export const NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX = "navigator is available; the index is still building";
+export const NAVIGATOR_BOOT_CAVEAT =
+  "If a navigator tool reports it is still booting, retry once before falling back to rg/fd.";
+export const NAVIGATOR_LAG_CAVEAT =
+  "Navigator's ranking may lag recent edits - verify candidates with `read` or `navigator_slice` before relying on them.";
+
+function directiveTier(facts: NavigatorPromptReadinessFacts): "strong" | "weak" {
+  const ratio = facts.coverage.total === 0 ? 0 : facts.coverage.indexed / facts.coverage.total;
+  return ratio >= STRONG_COVERAGE_THRESHOLD && facts.fullCrawlDone ? "strong" : "weak";
+}
+
+function weakDirective(coverage: { total: number; indexed: number }): string {
+  const pct = coverage.total === 0 ? 0 : Math.round((coverage.indexed / coverage.total) * 100);
+  return `${NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX} (${pct}% indexed) - try \`navigator_locate\` first and fall back to \`rg\`/\`fd\` if results look thin.`;
+}
+
 const PATH_WITH_SLASH_RE =
   /(^|[\s("'`])(?:\.\.?\/)?(?:[\w.-]+\/)+[\w.-]+(?:\.[a-z0-9]+)+(?:\:\d+(?:\:\d+)?)?(?=$|[\s)"'`.,!?])/i;
 
@@ -125,23 +142,6 @@ export function classifyNavigatorPrompt(prompt: string): NavigatorPromptClassifi
   return "likely_orientation";
 }
 
-export function isNavigatorPromptGuidanceReady(facts: NavigatorPromptReadinessFacts): boolean {
-  return (
-    facts.repoResolved &&
-    facts.selectedTools?.includes("navigator_locate") === true &&
-    facts.coverage.total > 0 &&
-    facts.coverage.indexed === facts.coverage.total &&
-    facts.fullCrawlDone &&
-    typeof facts.indexedHead === "string" &&
-    facts.indexedHead.length > 0 &&
-    typeof facts.currentHead === "string" &&
-    facts.currentHead.length > 0 &&
-    facts.indexedHead === facts.currentHead &&
-    !facts.dirty &&
-    !facts.workerFailed
-  );
-}
-
 // Persona tier gate: fires whenever the index is merely usable (at least one file
 // indexed, worker alive, tool selected). NOT gated on freshness — dirty/partial/
 // behind-HEAD repos are the exact case where always-on orientation is most needed.
@@ -157,17 +157,33 @@ export function personaUsable(facts: NavigatorPromptReadinessFacts): boolean {
 export function buildNavigatorPromptGuidance(args: BuildNavigatorPromptGuidanceArgs): string[] {
   const guidance: string[] = [];
   const persona = args.persona.trim();
+  const facts = args.readiness;
 
-  if (args.enablePersona && persona && personaUsable(args.readiness)) {
+  if (args.enablePersona && persona && personaUsable(facts)) {
     guidance.push(persona);
   }
 
-  if (
+  const directiveEligible =
     args.enableNudge &&
-    isNavigatorPromptGuidanceReady(args.readiness) &&
-    classifyNavigatorPrompt(args.prompt) === "likely_orientation"
-  ) {
-    guidance.push(NAVIGATOR_PROMPT_NUDGE);
+    facts.repoResolved &&
+    facts.selectedTools?.includes("navigator_locate") === true &&
+    !facts.workerFailed &&
+    classifyNavigatorPrompt(args.prompt) === "likely_orientation";
+
+  if (directiveEligible) {
+    if (directiveTier(facts) === "strong") {
+      guidance.push(NAVIGATOR_PROMPT_NUDGE);
+    } else {
+      guidance.push(weakDirective(facts.coverage));
+    }
+
+    // Caveats only alongside a directive.
+    if (facts.coverage.indexed === 0) {
+      guidance.push(NAVIGATOR_BOOT_CAVEAT);
+    }
+    if (facts.dirty || (facts.indexedHead && facts.currentHead && facts.indexedHead !== facts.currentHead)) {
+      guidance.push(NAVIGATOR_LAG_CAVEAT);
+    }
   }
 
   return guidance;

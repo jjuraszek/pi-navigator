@@ -82,6 +82,11 @@ function makeStats(overrides: Partial<StatsSummary> = {}): StatsSummary {
     medianTurnsToUseful: 1,
     staleSliceRate: 0.1,
     unchangedReadsAvoided: 2,
+    guardBlocks: 0,
+    guardWarns: 0,
+    guardAllowFallback: 0,
+    sessionsToolAvailable: 1,
+    sessionsToolUnavailable: 0,
     ...overrides,
   };
 }
@@ -173,4 +178,9 @@ test("formatStats renders all expected fields", () => {
   assert.ok(out.includes("unavailable_by_reason"));
   assert.ok(out.includes("non_git=2"), "should render reason=count pairs");
   assert.ok(out.includes("disabled=1"), "should render reason=count pairs");
+  assert.ok(out.includes("guard_blocks"));
+  assert.ok(out.includes("guard_warns"));
+  assert.ok(out.includes("guard_allow_fallback"));
+  assert.ok(out.includes("sessions_tool_available"));
+  assert.ok(out.includes("sessions_tool_unavailable"));
 });

@@ -279,6 +279,38 @@ export function aggregate(db: Db, opts: WindowOpts & { scope: string }): StatsSu
   );
   const unchangedReadsAvoided = unchangedRow?.cnt ?? 0;
 
+  // guard counts by action
+  const guardRows = (
+    scope === "lifetime"
+      ? (db
+          .prepare("SELECT action, COUNT(*) cnt FROM nav_guard GROUP BY action")
+          .all() as Array<{ action: string; cnt: number }>)
+      : (db
+          .prepare("SELECT action, COUNT(*) cnt FROM nav_guard WHERE session_id = ? GROUP BY action")
+          .all(scope) as Array<{ action: string; cnt: number }>)
+  );
+  let guardBlocks = 0;
+  let guardWarns = 0;
+  let guardAllowFallback = 0;
+  for (const r of guardRows) {
+    if (r.action === "block") guardBlocks = r.cnt;
+    else if (r.action === "warn") guardWarns = r.cnt;
+    else if (r.action === "allow_fallback") guardAllowFallback = r.cnt;
+  }
+
+  // tool availability split
+  const availRow = (
+    scope === "lifetime"
+      ? (db
+          .prepare("SELECT COALESCE(SUM(tools_selected), 0) avail, COUNT(*) total FROM nav_session")
+          .get() as { avail: number; total: number })
+      : (db
+          .prepare("SELECT COALESCE(SUM(tools_selected), 0) avail, COUNT(*) total FROM nav_session WHERE session_id = ?")
+          .get(scope) as { avail: number; total: number })
+  );
+  const sessionsToolAvailable = availRow?.avail ?? 0;
+  const sessionsToolUnavailable = (availRow?.total ?? 0) - sessionsToolAvailable;
+
   return {
     scope,
     locateTotal,
@@ -302,5 +334,10 @@ export function aggregate(db: Db, opts: WindowOpts & { scope: string }): StatsSu
     medianTurnsToUseful,
     staleSliceRate,
     unchangedReadsAvoided,
+    guardBlocks,
+    guardWarns,
+    guardAllowFallback,
+    sessionsToolAvailable,
+    sessionsToolUnavailable,
   };
 }

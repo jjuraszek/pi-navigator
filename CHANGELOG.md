@@ -4,6 +4,18 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+### Changed
+- **Prompt guidance is availability-gated, not freshness-gated.** Supersedes the v0.8.0 model where the per-prompt directive required a complete/current/clean index. The directive now fires whenever `navigator_locate` is selected and the prompt is orientation-style; index state only chooses a **strong** tier (coverage >= 90% and full crawl done) vs a **weak** tier, and appends booting / ranking-lag caveats - it never suppresses. The persona is still gated on a merely *usable* index (`coverage.indexed > 0`) and is suppressed only while nothing is indexed yet. Exact-path prompts keep the persona but drop the directive; external-only prompts get the persona only. Motivated by telemetry showing the freshness gate stayed silent during the boot window and active editing - the cases that need orientation most.
+
+### Added
+- **Shared repo identity across worktrees.** `repoName` is now derived from the main worktree (parent of `git rev-parse --git-common-dir`), so every linked worktree of a repo shares one index + telemetry DB instead of spawning a per-worktree pair. Bare repos and parse failures fall back to `basename(root)`. Stale per-worktree DBs from older versions are orphaned and can be deleted manually.
+- **Guard + availability telemetry (schema v3).** New `nav_guard` table records each grep-guard decision (`block` / `warn` / `allow_fallback`) with pattern kind and reason; `nav_session.tools_selected` records whether `navigator_locate` was offered each session. `/navigator stats` now reports guard fire counts and the tool-available vs tool-unavailable session split. Migration is additive (ALTER / CREATE IF NOT EXISTS); v2 telemetry is preserved, not dropped.
+
+### Changed
+- **Grep guard never blocks single-file greps.** Commands are segmented across `;`, `&&`, `||`, pipes, and `$(...)` / backtick substitutions, and each grep is classified on its own - flags from a neighbouring statement no longer leak into the classification. A grep counts as a repo-scan only when a path argument stats as a directory, or when a recursive flag is given with no path at all (`scansDir = paths.some(isDirectory) || (recursive && paths.length === 0)`); `grep -r foo file.ts` is allowed. Path probes resolve against the session cwd and bias to allow on any stat failure.
+- **Search telemetry ignores pipe-downstream filters.** A `grep`/`rg` reached through a single `|` (e.g. `ps aux | grep node`) is a filter, not a search, and is no longer counted as a fallback search in the consume pipeline.
+- **Docs.** `NAVIGATOR.md` and `README.md` document the availability-gated guidance model, the shared-DB naming rule, and the grep-guard posture; README notes the environment prerequisite that agent-instruction files must not hardcode an `rg`/`fd` preference with no navigator mention.
+
 ## [v0.8.0] - 2026-06-09
 
 ### Added

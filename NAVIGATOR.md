@@ -358,11 +358,29 @@ The worker commits every `indexBatchSize` files (default 50) in a `BEGIN IMMEDIA
 
 ## Prompt Guidance Readiness
 
-Navigator prompt guidance is automatic rather than user-configured. During `before_agent_start`, the extension appends the persona line only when `navigator_locate` is selected and the index is ready: coverage is non-empty and complete, `full_crawl_done = "1"`, `head_sha_at_index` matches the active repo `HEAD`, the worktree is clean, and the worker is not in a known failed state. Broad repo-orientation prompts receive one additional nudge to call `navigator_locate` before broad filesystem search.
+Navigator prompt guidance is automatic rather than user-configured. It is **availability-gated**: guidance fires when `navigator_locate` is in `selectedTools`, the repo is resolved, the worker is not failed, and the prompt classifies as an orientation request (`likely_orientation` - not an exact-path or purely external prompt). Terminal states (`non_git`, `disabled`) inject nothing (no `state` object; early return).
 
-This guidance is soft and non-blocking: it does not force the first tool call or replace `rg` for regex/full-content scans. `navigator.injectPersona` is ignored and no longer a supported behavior switch. If readiness cannot be proven, the extension fails quiet and injects no prompt guidance; use `/navigator status` for readiness details.
+### Tier selection (controlled by index state, not availability)
 
-`/navigator status` shows these values plus queue depth and lock owner.
+| Tier | Condition | Emitted text |
+|---|---|-|
+| **strong** | `coverage.indexed / coverage.total >= 0.9` AND `full_crawl_done = "1"` | `NAVIGATOR_PROMPT_NUDGE` ("call navigator_locate once before rg/find/read") |
+| **weak** | anything below strong threshold | `NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX` + coverage percent + fallback hint |
+
+### Caveats (appended alongside the directive only)
+
+| Caveat | Condition |
+|---|---|
+| Boot caveat | `coverage.indexed === 0` (nothing indexed yet) |
+| Lag caveat | `dirty === true` OR `indexedHead !== currentHead` (worktree dirty or index behind HEAD) |
+
+### Persona
+
+The persona line fires when `coverage.indexed > 0` (at least one file indexed) and `navigator_locate` is in `selectedTools`, regardless of tier. It is suppressed until something is indexed (`coverage.indexed === 0`). Exact-path prompts suppress the directive but keep the persona. External-only prompts get the persona only (no directive).
+
+This guidance is soft and non-blocking: it does not force the first tool call or replace `rg` for regex/full-content scans. `navigator.injectPersona` is ignored and no longer a supported behavior switch. If readiness cannot be proven (e.g. `systemPromptOptions` throws), the extension fails quiet and injects nothing; use `/navigator status` for readiness details.
+
+`/navigator status` shows coverage, queue depth, lock owner, and worker state.
 
 ---
 
@@ -376,7 +394,7 @@ This guidance is soft and non-blocking: it does not force the first tool call or
 
 - Located outside every worktree so it is shared across all worktrees and all agents/subagents of the same repository.
 - **`repo_id`** = 12-char prefix of the root commit SHA (`git rev-list --max-parents=0 HEAD`). Stable across clones and worktrees. Fallback for a **git repo with no commits** (fresh `git init` before the first commit): SHA-256 of `git rev-parse --git-common-dir`. Navigator does **not** operate outside a git work tree — when cwd is not inside a git repo, `resolveRepo` returns `dbPath: ""`, no index file is created, and the tools return a terminal "not inside a git repository — use rg/fd/read" message.
-- **`repo_name`** = basename of the worktree top-level directory (human-readable filename).
+- **`repo_name`** = basename of the **main worktree** (parent of `git rev-parse --git-common-dir`). All linked worktrees resolve to the same name and share one index + telemetry DB. Bare repos and parse failures fall back to `basename(root)`.
 
 ### Single-Writer Advisory Lock
 
@@ -392,6 +410,20 @@ Writers use `BEGIN IMMEDIATE` transactions to avoid write contention. Readers (`
 ### One Index Per Repository (Isolation Invariant)
 
 Navigator maintains exactly one index per repository identity, keyed by the repository's root-commit sha (`repoId`). All worktrees of that repository share the one index. Navigator operates only inside a git work tree; outside one it is fully dormant — no DB, no worker — and `navigator_locate`/`navigator_slice` return a terminal "not inside a git repository — use rg/fd/read" message. The freshness flag reported by `navigator_locate` reflects both HEAD distance (`head_behind`) and working-tree dirtiness (`dirty`); slices always read live worktree bytes, so isolation and ground-truth reads hold regardless of index state.
+
+### Grep Guard
+
+The `tool_call` hook intercepts bash commands and blocks slow repo-scanning shell `grep` calls, redirecting the agent to `rg` or `navigator_locate`. Key properties:
+
+- **Single-file greps are never blocked**, including those appearing inside `;`/`&&`/`$(...)` compound commands.
+- **Directory scan detection:** a grep is classified as a repo-scan when it carries a recursive flag (`-r`/`-R`/`--recursive`) or when a path argument stat's as a directory. Path arguments are resolved against the **session cwd** (`makeGrepProbeDir`). Stat failure -> allow (allow-on-unknown bias).
+- **Guard is inactive** when navigator is not ready (`state === null`) so the agent is never blocked without an alternative.
+- **Guard decisions are recorded to telemetry** (`nav_guard` table) when telemetry is enabled. Action semantics:
+  - `block` - a repo-scanning grep was blocked; the agent is redirected to `rg` or `navigator_locate`.
+  - `warn` - scan was allowed but warned (e.g. `rg` not installed; guard degraded to allow).
+  - `allow_fallback` - scan was allowed because navigator was not active/ready; no alternative to offer.
+
+`grepBlock: false` in config disables the hook entirely.
 
 ### Branch Divergence
 

@@ -1006,6 +1006,47 @@ test("FALLBACK_WINDOW inclusive edge: search at turn=3 (L.turn=0, FALLBACK_WINDO
   }
 });
 
+test("aggregate reports guard fire counts and availability split", () => {
+  const p = makeTmpPath();
+  try {
+    const db = openDb(p);
+    migrate(db);
+    db.prepare("INSERT INTO nav_session (session_id, started_at, tools_selected, used_locate) VALUES ('avail', 1, 1, 0)").run();
+    db.prepare("INSERT INTO nav_session (session_id, started_at, tools_selected, used_locate) VALUES ('unavail', 1, 0, 0)").run();
+    db.prepare("INSERT INTO nav_guard (session_id, ts, action, pattern_kind, reason) VALUES ('avail', 1, 'block', 'symbol', 'x')").run();
+    db.prepare("INSERT INTO nav_guard (session_id, ts, action, pattern_kind, reason) VALUES ('avail', 2, 'warn', NULL, 'y')").run();
+    const s = aggregate(db, { scope: "lifetime" });
+    assert.equal(s.guardBlocks, 1);
+    assert.equal(s.guardWarns, 1);
+    assert.equal(s.guardAllowFallback, 0);
+    assert.equal(s.sessionsToolAvailable, 1);
+    assert.equal(s.sessionsToolUnavailable, 1);
+  } finally {
+    cleanup(p);
+  }
+});
+
+test("session-scoped guard/availability: WHERE-binding excludes other session rows", () => {
+  const p = makeTmpPath();
+  try {
+    const db = openDb(p);
+    migrate(db);
+    db.prepare("INSERT INTO nav_session (session_id, started_at, tools_selected, used_locate) VALUES ('target', 1, 1, 0)").run();
+    db.prepare("INSERT INTO nav_session (session_id, started_at, tools_selected, used_locate) VALUES ('other', 2, 0, 0)").run();
+    db.prepare("INSERT INTO nav_guard (session_id, ts, action, pattern_kind, reason) VALUES ('target', 1, 'block', 'symbol', 'x')").run();
+    db.prepare("INSERT INTO nav_guard (session_id, ts, action, pattern_kind, reason) VALUES ('target', 2, 'allow_fallback', NULL, 'y')").run();
+    db.prepare("INSERT INTO nav_guard (session_id, ts, action, pattern_kind, reason) VALUES ('other', 3, 'warn', NULL, 'z')").run();
+    const s = aggregate(db, { scope: "target" });
+    assert.equal(s.guardBlocks, 1, "block from 'target' should be counted");
+    assert.equal(s.guardWarns, 0, "warn from 'other' must not leak into session scope");
+    assert.equal(s.guardAllowFallback, 1, "allow_fallback from 'target' should be counted");
+    assert.equal(s.sessionsToolAvailable, 1, "'target' has tools_selected=1");
+    assert.equal(s.sessionsToolUnavailable, 0, "'other' must not appear in session scope");
+  } finally {
+    cleanup(p);
+  }
+});
+
 test("FALLBACK_WINDOW exclusive beyond: search at turn=4 (L.turn=0, FALLBACK_WINDOW_TURNS=3) → abandoned", () => {
   const { db, path } = makeDb();
   try {

@@ -1,5 +1,5 @@
 import type { Db } from "../store/db.ts";
-import type { LocateRowInput, ConsumeRowInput, UnavailableRowInput } from "./types.ts";
+import type { LocateRowInput, ConsumeRowInput, UnavailableRowInput, GuardRowInput } from "./types.ts";
 
 function b(v: boolean): 0 | 1 {
   return v ? 1 : 0;
@@ -96,4 +96,14 @@ export function insertUnavailable(db: Db, row: UnavailableRowInput): void {
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(row.sessionId, row.seq, row.turn, row.ts, row.tool, row.reason);
+}
+
+export function insertGuard(db: Db, row: GuardRowInput): void {
+  db
+    .prepare(`INSERT INTO nav_guard (session_id, ts, action, pattern_kind, reason) VALUES (?, ?, ?, ?, ?)`)
+    .run(row.sessionId, row.ts, row.action, row.patternKind ?? null, row.reason ?? null);
+}
+
+export function markToolsSelected(db: Db, sessionId: string, selected: boolean): void {
+  db.prepare("UPDATE nav_session SET tools_selected = ? WHERE session_id = ?").run(b(selected), sessionId);
 }

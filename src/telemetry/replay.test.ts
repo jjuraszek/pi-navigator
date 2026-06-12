@@ -34,21 +34,20 @@ test("cd-rg-fallback: locate then cd+rg bash → miss-fallback", () => {
   assert.equal(stats.hitRate, 0);
 });
 
-test("pipe-grep: locate then ls|grep|head bash → grep detected, miss-fallback", () => {
+test("pipe-grep: locate then ls|grep|head bash -> grep is a pipe filter, no search consume -> abandoned", () => {
   const events = loadFixture("pipe-grep.json");
   const { telemetryDb, sessionId } = replayTrace(events);
 
+  // grep is pipe-downstream (ls | grep ... | head) - a filter, not a search
   const consumeRows = telemetryDb
     .prepare("SELECT * FROM nav_consume WHERE session_id = ?")
     .all(sessionId) as any[];
-  assert.equal(consumeRows.length, 1, "one search consume expected");
-  assert.equal(consumeRows[0].kind, "search");
-  assert.equal(consumeRows[0].search_tool, "grep");
-  // grep -v x → the first non-flag token is 'x'
-  assert.equal(consumeRows[0].search_pattern, "x");
+  assert.equal(consumeRows.length, 0);
 
   const stats = aggregate(telemetryDb, { scope: sessionId });
-  assert.equal(stats.missFallback, 1);
+  assert.equal(stats.locateTotal, 1);
+  assert.equal(stats.missFallback, 0);
+  assert.equal(stats.abandoned, 1);
 });
 
 test("pattern-clean: rg navigator; echo done → search_pattern is 'navigator', no trailing semicolon", () => {

@@ -1,3 +1,14 @@
+import type { GrepPatternKind } from "../grep-guard.ts";
+
+export type GuardAction = "block" | "warn" | "allow_fallback";
+export interface GuardRowInput {
+  sessionId: string;
+  ts: number;
+  action: GuardAction;
+  patternKind: GrepPatternKind | null;
+  reason: string | null;
+}
+
 export type Outcome = "hit" | "miss-fallback" | "abandoned" | "cluster-assist";
 export type ConsumeKind = "slice" | "read" | "search";
 export type UnavailableReason = "non_git" | "disabled" | "booting";
@@ -40,4 +51,6 @@ export interface StatsSummary {
   mrr: number; hitAt1: number; hitAt3: number; hitAt5: number;
   lowConfPrecision: number; highConfPrecision: number; medianTurnsToUseful: number;
   staleSliceRate: number; unchangedReadsAvoided: number;
+  guardBlocks: number; guardWarns: number; guardAllowFallback: number;
+  sessionsToolAvailable: number; sessionsToolUnavailable: number;
 }

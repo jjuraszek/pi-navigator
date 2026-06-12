@@ -48,6 +48,11 @@ export function formatStats(label: string, s: StatsSummary): string {
     `  low_conf_precision        ${pct(s.lowConfPrecision)}`,
     `  bypass_session_rate       ${pct(s.bypassSessionRate)}`,
     `  stale_slice_rate          ${pct(s.staleSliceRate)}`,
+    `  sessions_tool_available   ${s.sessionsToolAvailable}`,
+    `  sessions_tool_unavailable ${s.sessionsToolUnavailable}`,
+    `  guard_blocks              ${s.guardBlocks}`,
+    `  guard_warns               ${s.guardWarns}`,
+    `  guard_allow_fallback      ${s.guardAllowFallback}`,
     `  unavailable_by_reason     ${reasons}`,
   ];
   return lines.join("\n");

@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { isAbsolute, resolve } from "node:path";
 import { classifyGrepCommand, decideGrepAction } from "./src/grep-guard.ts";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -25,15 +26,14 @@ import { aggregate } from "./src/telemetry/stats.ts";
 import type { Db } from "./src/store/db.ts";
 
 /**
- * Resolve whether a path argument names a directory. Falls back to a syntactic
- * guess when the path can't be stat'd (e.g. relative to a cwd we don't probe).
+ * Returns a probeDir function bound to a cwd so relative path args resolve
+ * against the session cwd. Stat failure -> false (allow-on-unknown bias).
  */
-function grepProbeDir(p: string): boolean {
-  try {
-    return statSync(p).isDirectory();
-  } catch {
-    return p === "." || p === ".." || p.endsWith("/");
-  }
+function makeGrepProbeDir(cwd: string): (p: string) => boolean {
+  return (p) => {
+    try { return statSync(isAbsolute(p) ? p : resolve(cwd, p)).isDirectory(); }
+    catch { return false; }
+  };
 }
 
 /** Footer label for the current indexing coverage. */
@@ -73,7 +73,8 @@ export default function (pi: ExtensionAPI): void {
 
     // Classify first: non-grep commands (cd, npm, …) and non-repo-scan greps
     // return immediately, so the rg probe and block logic never run for them.
-    const classification = classifyGrepCommand(event.input.command, grepProbeDir);
+    const probeDir = makeGrepProbeDir(sessionCwd);
+    const classification = classifyGrepCommand(event.input.command, probeDir);
     if (!classification.isRepoScan) return;
 
     const navigatorActive = repoStatus === "ready" && state !== null;
@@ -89,7 +90,7 @@ export default function (pi: ExtensionAPI): void {
 
     const decision = decideGrepAction({
       command: event.input.command,
-      probeDir: grepProbeDir,
+      probeDir,
       rgAvailable,
       navigatorActive,
       classification,
@@ -102,6 +103,12 @@ export default function (pi: ExtensionAPI): void {
         "warning",
       );
     }
+
+    if (correlator) {
+      const guardAction = decision.action === "block" ? "block" : decision.warn ? "warn" : "allow_fallback";
+      correlator.recordGuard(guardAction, classification.patternKind, decision.reason ?? null);
+    }
+
     if (decision.action === "block") {
       return { block: true, reason: decision.reason };
     }
@@ -268,8 +275,10 @@ export default function (pi: ExtensionAPI): void {
   // before_agent_start — append readiness-gated navigator guidance
   // -------------------------------------------------------------------------
   pi.on("before_agent_start", async (event) => {
-    if (!state || repoStatus !== "ready") return;
+    if (!state) return;
     try {
+      const selectedTools = event.systemPromptOptions?.selectedTools;
+      correlator?.recordToolsSelected(selectedTools?.includes("navigator_locate") === true);
       const personaPath = fileURLToPath(
         new URL("./prompts/navigator-persona.md", import.meta.url),
       );
@@ -282,7 +291,7 @@ export default function (pi: ExtensionAPI): void {
         enableNudge: config.promptNudge,
         readiness: {
           repoResolved: true,
-          selectedTools: event.systemPromptOptions?.selectedTools,
+          selectedTools,
           coverage,
           fullCrawlDone: getMeta(state.db, "full_crawl_done") === "1",
           indexedHead: getMeta(state.db, "head_sha_at_index"),

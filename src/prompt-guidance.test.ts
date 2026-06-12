@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import type { NavigatorPromptReadinessFacts } from "./prompt-guidance.ts";
 import {
   NAVIGATOR_PROMPT_NUDGE,
+  NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX,
+  NAVIGATOR_BOOT_CAVEAT,
+  NAVIGATOR_LAG_CAVEAT,
   buildNavigatorPromptGuidance,
   classifyNavigatorPrompt,
   hasExactLocalPath,
   isExternalOnlyPrompt,
-  isNavigatorPromptGuidanceReady,
   personaUsable,
 } from "./prompt-guidance.ts";
 
@@ -120,100 +122,6 @@ test("isExternalOnlyPrompt: code-impact prompts stay orienting", () => {
   }
 });
 
-test("isNavigatorPromptGuidanceReady: complete facts are ready", () => {
-  assert.equal(isNavigatorPromptGuidanceReady(readyFacts), true);
-});
-
-test("isNavigatorPromptGuidanceReady: incomplete coverage is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      coverage: { total: 10, indexed: 9 },
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: empty coverage is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      coverage: { total: 0, indexed: 0 },
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: missing full crawl is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      fullCrawlDone: false,
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: stale indexed head is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      indexedHead: "def456",
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: dirty worktree is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      dirty: true,
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: missing navigator_locate is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      selectedTools: ["navigator_slice"],
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: repo unresolved is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      repoResolved: false,
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: currentHead null is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      currentHead: null,
-    }),
-    false,
-  );
-});
-
-test("isNavigatorPromptGuidanceReady: worker failure is not ready", () => {
-  assert.equal(
-    isNavigatorPromptGuidanceReady({
-      ...readyFacts,
-      workerFailed: true,
-    }),
-    false,
-  );
-});
-
 test("buildNavigatorPromptGuidance: ready broad prompt returns persona and nudge", () => {
   assert.deepEqual(
     buildNavigatorPromptGuidance({
@@ -240,21 +148,21 @@ test("buildNavigatorPromptGuidance: ready exact-path prompt returns persona only
   );
 });
 
-test("buildNavigatorPromptGuidance: partial index fires persona but not nudge", () => {
-  // Persona fires (indexed > 0 = usable); nudge stays silent (not fresh).
-  assert.deepEqual(
-    buildNavigatorPromptGuidance({
-      prompt: broadPromptCases[0],
-      persona,
-      readiness: {
-        ...readyFacts,
-        coverage: { total: 10, indexed: 5 },
-      },
-      enablePersona: true,
-      enableNudge: true,
-    }),
-    [persona],
-  );
+test("buildNavigatorPromptGuidance: partial index fires persona and weak directive", () => {
+  // Persona fires (indexed > 0 = usable); partial coverage -> weak tier nudge.
+  const result = buildNavigatorPromptGuidance({
+    prompt: broadPromptCases[0],
+    persona,
+    readiness: {
+      ...readyFacts,
+      coverage: { total: 10, indexed: 5 },
+    },
+    enablePersona: true,
+    enableNudge: true,
+  });
+  assert.equal(result[0], persona);
+  assert.ok(result.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+  assert.ok(result.some((l) => l.includes("50%")));
 });
 
 test("buildNavigatorPromptGuidance: both disabled returns empty array", () => {
@@ -311,7 +219,8 @@ test("personaUsable: false when worker failed / tool unselected", () => {
   assert.equal(personaUsable({ ...usableDirty, repoResolved: false }), false);
 });
 
-test("persona fires but nudge suppressed on a dirty/partial index", () => {
+test("persona fires and weak directive on a dirty/partial index", () => {
+  // dirty + head mismatch + partial -> weak directive + lag caveat
   const g = buildNavigatorPromptGuidance({
     prompt: "where is the readiness presenter",
     persona: "PERSONA",
@@ -319,7 +228,9 @@ test("persona fires but nudge suppressed on a dirty/partial index", () => {
     enablePersona: true,
     enableNudge: true,
   });
-  assert.deepEqual(g, ["PERSONA"]);
+  assert.equal(g[0], "PERSONA");
+  assert.ok(g.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+  assert.ok(g.includes(NAVIGATOR_LAG_CAVEAT));
 });
 
 test("nudge appended only when fresh gate passes and prompt is orientation", () => {
@@ -356,4 +267,77 @@ test("config flags gate each tier independently", () => {
     buildNavigatorPromptGuidance({ prompt: "where is x", persona: "P", readiness: fresh, enablePersona: true, enableNudge: false }),
     ["P"],
   );
+});
+
+// Availability-gated guidance with strong/weak tiers and caveats
+
+const baseFacts = {
+  repoResolved: true,
+  selectedTools: ["navigator_locate", "read"] as const,
+  coverage: { total: 100, indexed: 100 },
+  fullCrawlDone: true,
+  indexedHead: "abc",
+  currentHead: "abc",
+  dirty: false,
+  workerFailed: false,
+};
+const args = (over: Partial<typeof baseFacts>, prompt = "where is the rolling indexer") => ({
+  prompt, persona: "PERSONA", enablePersona: true, enableNudge: true,
+  readiness: { ...baseFacts, ...over },
+});
+
+test("strong tier: full coverage + crawl done -> strong directive, no caveats", () => {
+  const g = buildNavigatorPromptGuidance(args({}));
+  assert.ok(g.includes("PERSONA"));
+  assert.ok(g.includes(NAVIGATOR_PROMPT_NUDGE));
+  assert.ok(!g.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+  assert.ok(!g.includes(NAVIGATOR_LAG_CAVEAT));
+});
+
+test("weak tier: below 0.9 coverage -> weak directive with percentage, no strong directive", () => {
+  const g = buildNavigatorPromptGuidance(args({ coverage: { total: 100, indexed: 50 }, fullCrawlDone: false }));
+  assert.ok(g.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+  assert.ok(g.some((l) => l.includes("50%")));
+  assert.ok(!g.includes(NAVIGATOR_PROMPT_NUDGE));
+});
+
+test("boot state: indexed=0 -> weak directive + boot caveat, persona suppressed", () => {
+  const g = buildNavigatorPromptGuidance(args({ coverage: { total: 100, indexed: 0 }, fullCrawlDone: false }));
+  assert.ok(!g.includes("PERSONA"));
+  assert.ok(g.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+  assert.ok(g.includes(NAVIGATOR_BOOT_CAVEAT));
+});
+
+test("dirty / HEAD drift while usable -> strong directive + lag caveat", () => {
+  const g = buildNavigatorPromptGuidance(args({ dirty: true }));
+  assert.ok(g.includes(NAVIGATOR_PROMPT_NUDGE));
+  assert.ok(g.includes(NAVIGATOR_LAG_CAVEAT));
+  const g2 = buildNavigatorPromptGuidance(args({ indexedHead: "abc", currentHead: "def" }));
+  assert.ok(g2.includes(NAVIGATOR_LAG_CAVEAT));
+});
+
+test("tool not selected -> no guidance at all", () => {
+  const g = buildNavigatorPromptGuidance(args({ selectedTools: ["read", "grep"] as unknown as readonly ["navigator_locate", "read"] }));
+  assert.deepEqual(g, []);
+});
+
+test("exact-path prompt -> persona kept, directive + caveats suppressed", () => {
+  const g = buildNavigatorPromptGuidance(args({ dirty: true }, "open src/worktree.ts and fix it"));
+  assert.ok(g.includes("PERSONA"));
+  assert.ok(!g.includes(NAVIGATOR_PROMPT_NUDGE));
+  assert.ok(!g.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+  assert.ok(!g.includes(NAVIGATOR_LAG_CAVEAT));
+});
+
+test("external-only prompt -> persona only, no directive", () => {
+  const g = buildNavigatorPromptGuidance(args({}, "show git status"));
+  assert.ok(g.includes("PERSONA"));
+  assert.ok(!g.includes(NAVIGATOR_PROMPT_NUDGE));
+  assert.ok(!g.some((l) => l.startsWith(NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX)));
+});
+
+test("enablePersona=false drops persona but keeps directive", () => {
+  const g = buildNavigatorPromptGuidance({ ...args({}), enablePersona: false });
+  assert.ok(!g.includes("PERSONA"));
+  assert.ok(g.includes(NAVIGATOR_PROMPT_NUDGE));
 });

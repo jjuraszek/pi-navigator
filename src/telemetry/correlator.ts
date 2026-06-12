@@ -1,5 +1,6 @@
 import type { Db } from "../store/db.ts";
-import type { ResultMeta, SearchTool, UnavailableReason } from "./types.ts";
+import type { ResultMeta, SearchTool, UnavailableReason, GuardAction } from "./types.ts";
+import type { GrepPatternKind } from "../grep-guard.ts";
 import {
   ensureSession,
   markWriter as dbMarkWriter,
@@ -7,6 +8,8 @@ import {
   insertLocate,
   insertConsume,
   insertUnavailable,
+  insertGuard,
+  markToolsSelected,
 } from "./queries.ts";
 import { classifyQuery, detectSearch } from "./detect.ts";
 import { toRepoRel } from "../paths.ts";
@@ -74,6 +77,14 @@ export class TelemetryCorrelator {
 
   markWriter(): void {
     this.guard(() => dbMarkWriter(this.db, this.sessionId));
+  }
+
+  recordGuard(action: GuardAction, patternKind: GrepPatternKind | null, reason: string | null): void {
+    this.guard(() => insertGuard(this.db, { sessionId: this.sessionId, ts: Date.now(), action, patternKind, reason }));
+  }
+
+  recordToolsSelected(selected: boolean): void {
+    this.guard(() => markToolsSelected(this.db, this.sessionId, selected));
   }
 
   onToolStart(ev: { toolCallId: string; toolName: string; args: any }): void {

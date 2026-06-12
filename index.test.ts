@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import ext from "./index.ts";
-import { NAVIGATOR_PROMPT_NUDGE } from "./src/prompt-guidance.ts";
+import { NAVIGATOR_PROMPT_NUDGE, NAVIGATOR_LAG_CAVEAT, NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX } from "./src/prompt-guidance.ts";
 
 const PERSONA = readFileSync(new URL("./prompts/navigator-persona.md", import.meta.url), "utf8").trim();
 
@@ -246,7 +246,7 @@ test("before_agent_start: missing navigator_locate selected tool appends no guid
   }
 });
 
-test("before_agent_start: dirty worktree appends persona only", async () => {
+test("before_agent_start: dirty worktree appends directive with lag caveat", async () => {
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo } = gitRepoWithCommit();
@@ -255,11 +255,11 @@ test("before_agent_start: dirty worktree appends persona only", async () => {
   try {
     await pi.fire("session_start", {}, noopCtx(repo));
 
-    assert.ok(
-      await waitForPromptResult(
-        pi,
-        promptEvent("investigate why navigator is rarely used in gridstrong"),
-      ),
+    // Wait for full crawl (nudgePresent => strong directive, coverage>0) before mutating.
+    await waitForPromptResult(
+      pi,
+      promptEvent("investigate why navigator is rarely used in gridstrong"),
+      nudgePresent,
     );
 
     writeFileSync(join(repo, "grid.rb"), "class Grid\n  def sync\n    :dirty\n  end\nend\n");
@@ -269,8 +269,13 @@ test("before_agent_start: dirty worktree appends persona only", async () => {
       undefined,
     );
     assert.ok(result);
+    // Directive is always emitted regardless of dirty state (strong tier since crawl is done).
+    const directiveRe = new RegExp(
+      `(?:${NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|${NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+    );
+    assert.match(result.systemPrompt, directiveRe);
+    assert.match(result.systemPrompt, new RegExp(NAVIGATOR_LAG_CAVEAT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(result.systemPrompt, new RegExp(PERSONA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    assert.doesNotMatch(result.systemPrompt, new RegExp(NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   } finally {
     await pi.fire("session_shutdown", {}, undefined);
     restore();
@@ -279,7 +284,7 @@ test("before_agent_start: dirty worktree appends persona only", async () => {
   }
 });
 
-test("before_agent_start: stale indexed HEAD appends persona only", async () => {
+test("before_agent_start: stale indexed HEAD appends directive with lag caveat", async () => {
   const indexDir = mkdtempSync(join(tmpdir(), "nav-prompt-idx-"));
   const { restore } = withAgentSettings({ indexDir, languages: ["ruby"] });
   const { repo, git } = gitRepoWithCommit();
@@ -288,11 +293,11 @@ test("before_agent_start: stale indexed HEAD appends persona only", async () => 
   try {
     await pi.fire("session_start", {}, noopCtx(repo));
 
-    assert.ok(
-      await waitForPromptResult(
-        pi,
-        promptEvent("investigate why navigator is rarely used in gridstrong"),
-      ),
+    // Wait for full crawl (nudgePresent => strong directive, coverage>0) before mutating.
+    await waitForPromptResult(
+      pi,
+      promptEvent("investigate why navigator is rarely used in gridstrong"),
+      nudgePresent,
     );
 
     writeFileSync(join(repo, "grid.rb"), "class Grid\n  def sync\n    :new_head\n  end\nend\n");
@@ -305,8 +310,13 @@ test("before_agent_start: stale indexed HEAD appends persona only", async () => 
       undefined,
     );
     assert.ok(result);
+    // Directive is always emitted regardless of stale HEAD (strong tier since crawl is done).
+    const directiveRe = new RegExp(
+      `(?:${NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}|${NAVIGATOR_PROMPT_NUDGE_WEAK_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+    );
+    assert.match(result.systemPrompt, directiveRe);
+    assert.match(result.systemPrompt, new RegExp(NAVIGATOR_LAG_CAVEAT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(result.systemPrompt, new RegExp(PERSONA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    assert.doesNotMatch(result.systemPrompt, new RegExp(NAVIGATOR_PROMPT_NUDGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   } finally {
     await pi.fire("session_shutdown", {}, undefined);
     restore();

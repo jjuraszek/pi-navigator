@@ -43,6 +43,29 @@ test("workingTreeDirty is true with an uncommitted edit, outside git, and on git
   assert.equal(workingTreeDirty(d), true, "git command errors must be treated as dirty/not-ready");
 });
 
+test("linked worktree resolves to the main worktree's repoName and dbPath", () => {
+  const main = tmpRepo();
+  const wtParent = mkdtempSync(join(tmpdir(), "nav-wt-linked-"));
+  const linked = join(wtParent, "feature");
+  execFileSync("git", ["worktree", "add", "-q", linked, "-b", "feature"], { cwd: main });
+  const rMain = resolveRepo(main, DEFAULT_CONFIG);
+  const rLinked = resolveRepo(linked, DEFAULT_CONFIG);
+  assert.equal(rLinked.repoName, rMain.repoName);
+  assert.equal(rLinked.repoId, rMain.repoId);
+  assert.equal(rLinked.dbPath, rMain.dbPath);
+  execFileSync("git", ["worktree", "remove", "--force", linked], { cwd: main });
+  rmSync(wtParent, { recursive: true, force: true });
+  rmSync(main, { recursive: true, force: true });
+});
+
+test("non-git directory still yields empty dbPath (no regression)", () => {
+  const d = mkdtempSync(join(tmpdir(), "nav-nogit2-"));
+  const r = resolveRepo(d, DEFAULT_CONFIG);
+  assert.equal(r.isGit, false);
+  assert.equal(r.dbPath, "");
+  rmSync(d, { recursive: true, force: true });
+});
+
 test("resolveRepo yields root, name, stable id, and cache db path", () => {
   const d = tmpRepo();
   const r = resolveRepo(d, DEFAULT_CONFIG);

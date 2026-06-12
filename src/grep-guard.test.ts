@@ -50,3 +50,34 @@ test("rg absent on a repo-scan allows with warn flag", () => {
   assert.equal(r.action, "allow");
   assert.equal(r.warn, true);
 });
+test("single-file grep followed by another statement's -R flag is allowed", () => {
+  assert.equal(decideGrepAction({ command: "grep -n pat file.md; ls -R somedir", ...base }).action, "allow");
+  assert.equal(decideGrepAction({ command: "grep -n pat file.md && cat -R other.md", ...base }).action, "allow");
+});
+test("single-file grep beside a non-grep rg scan is allowed (rg is not guarded)", () => {
+  assert.equal(decideGrepAction({ command: "grep -n x file.md && rg -r foo .", ...base }).action, "allow");
+});
+test("a real scan inside a multi-statement command is still blocked", () => {
+  assert.equal(decideGrepAction({ command: "echo hi; grep -r foo src/", ...base }).action, "block");
+  assert.equal(decideGrepAction({ command: "grep -n a f.md && grep -r b src/", ...base }).action, "block");
+});
+test("scan inside a command substitution is still blocked", () => {
+  assert.equal(decideGrepAction({ command: "x=$(grep -r foo src/)", ...base }).action, "block");
+});
+test("single-file grep inside a command substitution is allowed", () => {
+  assert.equal(decideGrepAction({ command: "x=$(grep -n foo README.md)", ...base }).action, "allow");
+});
+test("recursive flag with only file args is NOT a scan (spec M2)", () => {
+  assert.equal(decideGrepAction({ command: "grep -r foo file.ts", ...base }).action, "allow");
+  assert.equal(decideGrepAction({ command: "grep -R pattern a.md b.md", ...base }).action, "allow");
+});
+test("recursive flag with no path args defaults to scanning cwd -> blocked", () => {
+  assert.equal(decideGrepAction({ command: "grep -r foo", ...base }).action, "block");
+});
+test("recursive flag with a directory path arg is still a scan", () => {
+  assert.equal(decideGrepAction({ command: "grep -r foo src/", ...base }).action, "block");
+  assert.equal(decideGrepAction({ command: "grep -rn foo .", ...base }).action, "block");
+});
+test("recursive grep with mixed file and directory args is still a scan", () => {
+  assert.equal(decideGrepAction({ command: "grep -r foo file.ts src/", ...base }).action, "block");
+});
