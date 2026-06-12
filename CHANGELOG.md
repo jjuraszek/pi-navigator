@@ -4,6 +4,8 @@ All notable changes are documented here. Newest first.
 
 ## [Unreleased]
 
+## [v0.9.0] - 2026-06-12
+
 ### Changed
 - **Prompt guidance is availability-gated, not freshness-gated.** Supersedes the v0.8.0 model where the per-prompt directive required a complete/current/clean index. The directive now fires whenever `navigator_locate` is selected and the prompt is orientation-style; index state only chooses a **strong** tier (coverage >= 90% and full crawl done) vs a **weak** tier, and appends booting / ranking-lag caveats - it never suppresses. The persona is still gated on a merely *usable* index (`coverage.indexed > 0`) and is suppressed only while nothing is indexed yet. Exact-path prompts keep the persona but drop the directive; external-only prompts get the persona only. Motivated by telemetry showing the freshness gate stayed silent during the boot window and active editing - the cases that need orientation most.
 
